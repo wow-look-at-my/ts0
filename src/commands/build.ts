@@ -55,6 +55,10 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 		...(config.target === "node" && {
 			packages: "external",
 		}),
+		// JSX support (esbuild). Threaded before the escape hatch so an
+		// explicit esbuild.jsx can still override it.
+		...(config.jsx && { jsx: config.jsx }),
+		...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
 		// User overrides
 		...config.esbuild,
 	};
@@ -110,6 +114,22 @@ function applyOverrides(config: Ts0Config, overrides?: BuildOverrides): Ts0Confi
 	return out;
 }
 
+// tsconfigJsx maps ts0's esbuild-style jsx setting to the corresponding
+// TypeScript tsconfig `jsx` value, so the type-checker and bundler agree.
+//   automatic -> react-jsx   (modern runtime; uses jsxImportSource)
+//   transform -> react       (classic React.createElement)
+//   preserve  -> preserve
+function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
+	switch (jsx) {
+		case "automatic":
+			return "react-jsx";
+		case "transform":
+			return "react";
+		case "preserve":
+			return "preserve";
+	}
+}
+
 export async function typecheck(overrides?: BuildOverrides): Promise<{ success: boolean; output: string }> {
 	const { config: loaded, rootDir } = loadConfig();
 	const config = applyOverrides(loaded, overrides);
@@ -123,19 +143,30 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 		return { success: true, output: "Skipped (HTML entry)." };
 	}
 
-	// Generate a temporary tsconfig based on ts0 config
+	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
+	// thread the matching tsc options and widen the include glob so .tsx files
+	// are type-checked (esbuild's jsx setting alone does not type-check JSX).
+	const compilerOptions: Record<string, unknown> = {
+		target: "ESNext",
+		module: "NodeNext",
+		moduleResolution: "NodeNext",
+		strict: config.strict,
+		noEmit: true,
+		skipLibCheck: true,
+		esModuleInterop: true,
+		allowImportingTsExtensions: true,
+	};
+	if (config.jsx) {
+		compilerOptions.jsx = tsconfigJsx(config.jsx);
+		if (config.jsxImportSource) {
+			compilerOptions.jsxImportSource = config.jsxImportSource;
+		}
+	}
 	const tsconfigContent = {
-		compilerOptions: {
-			target: "ESNext",
-			module: "NodeNext",
-			moduleResolution: "NodeNext",
-			strict: config.strict,
-			noEmit: true,
-			skipLibCheck: true,
-			esModuleInterop: true,
-			allowImportingTsExtensions: true,
-		},
-		include: ["**/*.ts"],
+		compilerOptions,
+		// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
+		// TypeScript variants are type-checked too.
+		include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
 		exclude: ["node_modules", config.outdir].filter(Boolean),
 	};
 

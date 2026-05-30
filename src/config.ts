@@ -43,6 +43,16 @@ export interface Ts0Config {
 	// matches assetDirs: ["people"].
 	assetDirs?: string[];
 
+	// JSX support. Set `jsx` to enable JSX/TSX in both the type-checker and the
+	// bundler. Values follow esbuild's naming: "automatic" (modern runtime, no
+	// factory import needed; pair with `jsxImportSource`), "transform" (classic
+	// React.createElement), or "preserve". When set, `.tsx` files are included
+	// in the type-check and esbuild is configured to match, so a Preact/React
+	// project needs no esbuild escape hatch. `jsxImportSource` sets the module
+	// the automatic runtime imports from (e.g. "preact", "react").
+	jsx?: "automatic" | "transform" | "preserve";
+	jsxImportSource?: string;
+
 	// Additional esbuild options (escape hatch)
 	esbuild?: Record<string, unknown>;
 }
