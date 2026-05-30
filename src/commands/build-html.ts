@@ -201,6 +201,13 @@ async function processHtml(
 			target: "esnext",
 			write: false,
 			logLevel: "silent",
+			// JSX support (esbuild). Without this an .tsx/.jsx script entry
+			// falls back to esbuild's default classic transform
+			// (React.createElement), which breaks Preact/automatic-runtime
+			// projects with "React is not defined". Threaded before the
+			// escape hatch so an explicit esbuild.jsx can still override it.
+			...(config.jsx && { jsx: config.jsx }),
+			...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
 		};
 
 		let entryDescription: string;

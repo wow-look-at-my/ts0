@@ -26,6 +26,7 @@ src/
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
+    html-jsx/           # HTML+JSX (Preact, automatic runtime) regression sample
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -59,6 +60,11 @@ end-to-end by:
 4. Running `ts0 build` and `ts0 test` against `samples/basic`.
 5. Running `ts0 build` against `samples/html` and asserting the bundled JS/CSS
     are inlined into a single `dist/index.html`.
+6. Running `ts0 build` against `samples/html-jsx` and asserting the JSX compiled
+    to the automatic Preact runtime (`preact/jsx-runtime`) with no
+    `React.createElement`/`React.Fragment` &mdash; the regression guard for the
+    "React is not defined" bug where JSX config wasn't threaded into the HTML
+    build path.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -70,9 +76,10 @@ the new behavior is covered.
     imports (e.g. `import { build } from "./commands/build.ts"`) so
     `--experimental-strip-types` resolves them.
 - **Dependencies:** keep them minimal. Production deps are `esbuild` and
-    `typescript`; `@types/node` is the only dev dep. Don't add a CLI parser, a
-    test framework, or a bundler abstraction &mdash; the whole point is that ts0
-    stays small.
+    `typescript`. Dev deps are `@types/node` and `preact` (the latter only so the
+    `samples/html-jsx` regression sample can resolve `preact/jsx-runtime` when CI
+    builds it). Don't add a CLI parser, a test framework, or a bundler
+    abstraction &mdash; the whole point is that ts0 stays small.
 - **Argument parsing:** `src/cli.ts` parses `process.argv` by hand. New commands
     should follow the same pattern (no new dependency).
 
@@ -96,6 +103,18 @@ defaults plus auto-detected entry. Don't break the no-config-file path.
 `tsc --noEmit` against it, and deletes it in a `finally`. The TypeScript binary
 is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
 project doesn't need its own `typescript` install. Preserve both behaviors.
+
+The generated tsconfig excludes nested ts0 projects (any subdirectory with its
+own `ts0.json`, via `findNestedProjectDirs`). Without this, building ts0 itself
+would type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
+with `TS17004`. A nested project is type-checked on its own when built directly.
+
+## JSX
+
+`jsx`/`jsxImportSource` are threaded into esbuild from **both** the Node/TS path
+(`build.ts`) and the HTML path (`build-html.ts`'s `<script>` bundling). Keep them
+in sync: if only one path sets them, HTML+JSX projects silently fall back to
+esbuild's classic `React.createElement` transform and break Preact at runtime.
 
 ## HTML entries
 

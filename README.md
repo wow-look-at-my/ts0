@@ -90,6 +90,8 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `test.pattern` | `string`           | `"**/*.test.ts"`   | Glob for test files                                           |
 | `embedAssets` | `boolean`           | `true`             | HTML entries: embed runtime-fetched assets (see below). Set `false` to skip. |
 | `assetDirs` | `string[]`            | &mdash;            | HTML entries: directories to scan for embeddable assets (relative to config file). When set, only these dirs are scanned instead of the entry's directory. |
+| `jsx`       | `"automatic" \| "transform" \| "preserve"` | &mdash; | Enable JSX/TSX. `"automatic"` uses the modern runtime (no factory import; pair with `jsxImportSource`); `"transform"` is the classic `React.createElement`; `"preserve"` leaves JSX as-is. |
+| `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
 | `esbuild`   | `object`              | &mdash;            | Escape hatch &mdash; merged into the esbuild options last     |
 
 When `outfile` is set, `ts0` produces a single executable file with a Node shebang &mdash;
@@ -143,6 +145,26 @@ via JS imports instead.
 The fetch interceptor exposes `window.__ts0_embedded_paths__` &mdash; an array of all
 embedded asset keys. Client code can use this to enumerate available assets at runtime
 (e.g. to discover all `.xml` files in a data directory without a hardcoded manifest).
+
+### JSX / TSX
+
+Set `jsx` to compile `.tsx`/`.jsx`. The setting is threaded into both the type-checker
+and esbuild &mdash; for **every** entry kind, including HTML entries whose `<script>`
+tags pull in `.tsx`. A Preact app uses the automatic runtime:
+
+```json
+{
+    "entry": "index.html",
+    "jsx": "automatic",
+    "jsxImportSource": "preact"
+}
+```
+
+With `"automatic"`, JSX compiles to `preact/jsx-runtime` calls and needs no factory
+import. Omitting `jsxImportSource` (or using `"transform"`) makes esbuild emit the
+classic `React.createElement`, which throws `React is not defined` in a Preact bundle
+&mdash; so always pair `"automatic"` with `jsxImportSource` for Preact/React. See
+`samples/html-jsx` for a complete Preact-via-HTML example.
 
 ## How it works
 
