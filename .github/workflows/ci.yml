@@ -71,3 +71,62 @@ jobs:
         run: |
           ts0 build
           ts0 test
+
+      - name: Test html sample
+        working-directory: samples/html
+        run: |
+          ts0 build
+          test -f dist/index.html
+          # The bundled output must inline the JS and CSS, with no remaining
+          # local src= or href= references to source files.
+          grep -q '<style' dist/index.html
+          grep -q 'getElementById' dist/index.html
+          ! grep -qE '<script[^>]+src=' dist/index.html
+          ! grep -qE '<link[^>]+rel=["'"'"']stylesheet["'"'"']' dist/index.html
+          # CSS asset embedding: the body's background-image url() must be
+          # rewritten to a data: URL so the bundle works from disk.
+          grep -q 'data:image/png;base64' dist/index.html
+          # Inline-module bundling: the inline <script type="module"> body
+          # imports ./src/greet.ts; the bundled output must contain the
+          # call site and resolved import.
+          grep -q 'greeting("inline")' dist/index.html
+          # Fetch interceptor injection: presence of the patched fetch and
+          # the embedded shader text, with no leftover __ASSETS_JSON__.
+          grep -q 'window.fetch' dist/index.html
+          grep -q 'embedded by ts0' dist/index.html
+          ! grep -q '__ASSETS_JSON__' dist/index.html
+          # CLI flag overrides: build a different entry to a different
+          # outfile without a ts0.json change.
+          rm -rf dist
+          ts0 build --entry index.html --outfile out/cli-flag.html
+          test -f out/cli-flag.html
+
+      - name: Test html-jsx sample
+        working-directory: samples/html-jsx
+        run: |
+          ts0 build
+          test -f dist/index.html
+          # JSX through an HTML entry must use the automatic Preact runtime,
+          # NOT esbuild's default classic transform. A Preact bundle that
+          # emits React.createElement throws "React is not defined" at
+          # runtime, so assert the classic factory is entirely absent and the
+          # preact/jsx-runtime module is bundled in.
+          ! grep -q 'React.createElement' dist/index.html
+          ! grep -q 'React.Fragment' dist/index.html
+          grep -q 'preact/jsx-runtime' dist/index.html
+          # The rendered component's text must survive bundling.
+          grep -q 'ts0 + Preact' dist/index.html
+
+      - name: Upload html sample build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-sample
+          path: samples/html/dist/index.html
+
+      - name: Upload html-jsx sample build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-jsx-sample
+          path: samples/html-jsx/dist/index.html

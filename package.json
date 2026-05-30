@@ -8,17 +8,20 @@
 	},
 	"scripts": {
 		"build": "node --experimental-strip-types src/cli.ts build",
+		"prepare": "npm run build",
 		"prepublishOnly": "npm run build"
 	},
 	"files": [
-		"dist/ts0"
+		"dist/ts0",
+		"src/runtime/fetch-interceptor.js"
 	],
 	"dependencies": {
 		"esbuild": "^0.25.0",
 		"typescript": "^5.7.0"
 	},
 	"devDependencies": {
-		"@types/node": "^22.0.0"
+		"@types/node": "^22.0.0",
+		"preact": "^10.25.4"
 	},
 	"engines": {
 		"node": ">=22.0.0"

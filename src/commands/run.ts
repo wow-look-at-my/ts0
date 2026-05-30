@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join, basename } from "node:path";
 import { loadConfig } from "../config.ts";
 import { build } from "./build.ts";
+import { isHtmlEntry } from "./build-html.ts";
 
 export interface RunOptions {
 	// Skip build step (use for development with --experimental-strip-types)
@@ -14,6 +15,11 @@ export interface RunOptions {
 
 export async function run(options: RunOptions = {}): Promise<void> {
 	const { config, rootDir } = loadConfig();
+
+	if (isHtmlEntry(options.file ?? config.entry)) {
+		console.error("ts0 run does not support HTML entries. Use 'ts0 build' to produce a bundled HTML file.");
+		process.exit(1);
+	}
 
 	if (options.file) {
 		// Run specific file
