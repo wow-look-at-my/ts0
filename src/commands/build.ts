@@ -1,5 +1,6 @@
 import * as esbuild from "esbuild";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { readdirSync, statSync, existsSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 
@@ -114,6 +115,29 @@ function applyOverrides(config: Ts0Config, overrides?: BuildOverrides): Ts0Confi
 	return out;
 }
 
+// findNestedProjectDirs returns the rootDir-relative paths of subdirectories
+// that are themselves ts0 projects (they contain their own ts0.json). The
+// self-type-check excludes these so a nested project's settings (e.g. JSX)
+// don't leak into the parent's type-check. node_modules/dist/dotfiles are
+// skipped, and descent stops at a nested project boundary.
+function findNestedProjectDirs(rootDir: string): string[] {
+	const found: string[] = [];
+	const walk = (dir: string): void => {
+		for (const name of readdirSync(dir)) {
+			if (name === "node_modules" || name === "dist" || name.startsWith(".")) continue;
+			const p = join(dir, name);
+			if (!statSync(p).isDirectory()) continue;
+			if (existsSync(join(p, "ts0.json"))) {
+				found.push(relative(rootDir, p).split(/[\\/]/).join("/"));
+				continue; // a nested project handles its own subtree
+			}
+			walk(p);
+		}
+	};
+	walk(rootDir);
+	return found;
+}
+
 // tsconfigJsx maps ts0's esbuild-style jsx setting to the corresponding
 // TypeScript tsconfig `jsx` value, so the type-checker and bundler agree.
 //   automatic -> react-jsx   (modern runtime; uses jsxImportSource)
@@ -167,7 +191,11 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 		// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
 		// TypeScript variants are type-checked too.
 		include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
-		exclude: ["node_modules", config.outdir].filter(Boolean),
+		// Exclude node_modules, the output dir, and any nested ts0 projects.
+		// A nested project (its own ts0.json) may use different settings --
+		// e.g. JSX -- that would make the parent's type-check fail on it; it
+		// is type-checked on its own when built directly.
+		exclude: ["node_modules", config.outdir, ...findNestedProjectDirs(rootDir)].filter(Boolean),
 	};
 
 	const { execSync } = await import("node:child_process");

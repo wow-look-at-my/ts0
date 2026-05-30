@@ -101,9 +101,32 @@ jobs:
           ts0 build --entry index.html --outfile out/cli-flag.html
           test -f out/cli-flag.html
 
+      - name: Test html-jsx sample
+        working-directory: samples/html-jsx
+        run: |
+          ts0 build
+          test -f dist/index.html
+          # JSX through an HTML entry must use the automatic Preact runtime,
+          # NOT esbuild's default classic transform. A Preact bundle that
+          # emits React.createElement throws "React is not defined" at
+          # runtime, so assert the classic factory is entirely absent and the
+          # preact/jsx-runtime module is bundled in.
+          ! grep -q 'React.createElement' dist/index.html
+          ! grep -q 'React.Fragment' dist/index.html
+          grep -q 'preact/jsx-runtime' dist/index.html
+          # The rendered component's text must survive bundling.
+          grep -q 'ts0 + Preact' dist/index.html
+
       - name: Upload html sample build
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: html-sample
           path: samples/html/dist/index.html
+
+      - name: Upload html-jsx sample build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-jsx-sample
+          path: samples/html-jsx/dist/index.html
