@@ -37,6 +37,9 @@ Entry points:
 	*.ts					# Bundled to a single JS file (or directory)
 	*.html					# All <script src> and <link rel=stylesheet>
 								referenced locally are inlined into the output HTML
+	<dir>/					# "js" library target: every *.ts under the
+								directory is compiled to a parallel *.js tree,
+								structure preserved (e.g. src/a/b.ts -> dist/a/b.js)
 `;
 
 async function main() {
