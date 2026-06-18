@@ -133,11 +133,15 @@ jobs:
           ! test -e dist/math/vec.js.map
           # ESM output.
           grep -q 'export' dist/math/vec.js
-          # Cross-module bundling: shape.ts imports ./vec extensionlessly;
-          # add() must be inlined and there must be no runtime ./vec import.
-          ! grep -q 'from "./vec"' dist/math/shape.js
-          grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
-          # Loader escape hatch: .frag imported as text is inlined as a string
+          # No duplication: add() is shared (vec.ts is an entry AND shape.ts
+          # imports it), so it must be emitted once into a chunk and imported,
+          # never inlined into each output. Assert the body lives in exactly one
+          # file, a chunk exists, and shape.js imports it rather than inlining.
+          test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
+          ls dist/chunk-*.js >/dev/null
+          grep -q 'chunk-' dist/math/shape.js
+          ! grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
+          # Loader escape hatch: a non-shared .frag import is inlined as text
           # (proves esbuild's text loader ran; a JS-module import would error).
           grep -q 'FRAG_MARKER' dist/gfx/shader.js
 

@@ -3,6 +3,7 @@ import { join, resolve, extname } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import type { Ts0Config } from "../config.ts";
 import type { BuildResult } from "./build.ts";
+import { baseEsbuildOptions } from "./esbuild-base.ts";
 
 // isJsTarget reports whether the configured entry selects the "js" library
 // target: a *directory* of TypeScript modules compiled in place — every file
@@ -46,11 +47,14 @@ function collectEntryPoints(srcDir: string, outDirAbs: string): string[] {
 }
 
 // buildJs compiles a directory of TypeScript modules into a parallel tree of
-// ESM JavaScript under outdir. Each source file is its own esbuild entry point
-// (no cross-module entry splitting), so a consumer can import any single output
-// module by URL and get a self-contained file with its local dependencies and
-// any loader-backed imports (e.g. .wgsl text) inlined. This is the shape a
-// library deployed to static hosting (GitHub Pages, a CDN) wants.
+// ESM JavaScript under outdir. Each source file is its own esbuild entry point,
+// so a consumer can import any single output module by URL. Code splitting is
+// enabled (for esm output): a module imported by more than one entry is emitted
+// once into a shared chunk and imported, never duplicated into each output. The
+// consumer still writes a single import — the browser fetches any shared chunk
+// transitively. Loader-backed imports (e.g. .wgsl text) and non-shared local
+// imports stay inlined in the importing module. This is the shape a library
+// deployed to static hosting (GitHub Pages, a CDN) wants.
 export async function buildJs(
 	config: Ts0Config,
 	rootDir: string,
@@ -86,21 +90,13 @@ export async function buildJs(
 		// <src>/webgpu/sky.ts -> <outdir>/webgpu/sky.js.
 		outdir: outDir,
 		outbase: srcDir,
-		bundle: true,
-		platform: config.target === "node" ? "node" : "browser",
-		format: config.format,
-		minify: config.minify,
-		sourcemap: config.sourcemap,
-		target: "esnext",
-		// Node-specific settings: keep node_modules out of the bundle.
-		...(config.target === "node" && {
-			packages: "external",
-		}),
-		// JSX support (esbuild). Threaded before the escape hatch so an
-		// explicit esbuild.jsx can still override it.
-		...(config.jsx && { jsx: config.jsx }),
-		...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
-		// User overrides (e.g. loader: { ".wgsl": "text" }).
+		...baseEsbuildOptions(config),
+		// Deduplicate code shared across entry points into chunks instead of
+		// inlining a copy into each output. esbuild only supports splitting for
+		// esm; for other formats fall back to (duplicating) inlined output.
+		...(config.format === "esm" && { splitting: true }),
+		// User overrides (escape hatch — e.g. loader: { ".wgsl": "text" }, or
+		// splitting: false to force self-contained outputs).
 		...config.esbuild,
 	};
 

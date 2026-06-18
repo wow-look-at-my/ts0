@@ -165,10 +165,14 @@ individual module by URL.
 }
 ```
 
-- Each file is its own esbuild entry point (no cross-module entry splitting), so
-    every output module is **self-contained**: its local imports and any
-    loader-backed imports (e.g. `import src from "./shader.wgsl"` with the
-    `loader` escape hatch above) are inlined.
+- Each file is its own esbuild entry point. Code shared across entries is
+    **deduplicated into a chunk** (for `esm` output) and imported — never copied
+    into each output. A consumer still writes a single import; the browser
+    fetches any shared chunk transitively. Loader-backed imports (e.g. `import
+    src from "./shader.wgsl"` with the `loader` escape hatch above) and
+    non-shared local imports stay inlined in the importing module. Pass
+    `"esbuild": { "splitting": false }` to force fully self-contained outputs
+    (with duplication) instead.
 - Declaration files (`*.d.ts`) and tests (`*.test.*`, `*.spec.*`) are skipped.
 - Type-checking uses **bundler** module resolution (matching esbuild), so
     extensionless relative imports and loader-backed imports type-check without

@@ -22,6 +22,7 @@ src/
         build.ts        # tsc --noEmit, then esbuild bundle (dispatches HTML/js)
         build-html.ts   # bundles an .html entry into a single inlined .html
         build-js.ts     # compiles a directory entry into a parallel .js tree
+        esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
         run.ts          # build (or strip-types) + node
         test.ts         # node --test on discovered test files
 samples/
@@ -69,8 +70,10 @@ end-to-end by:
     build path.
 7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
     the js library target compiled every `src/**/*.ts` to a parallel
-    `dist/**/*.js`, skipped `*.d.ts`, inlined a cross-module import and a
-    `.frag` text-loader import, and emitted no sourcemaps.
+    `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
+    chunk (the shared body appears in exactly one output file, not copied into
+    each importer), inlined a non-shared `.frag` text-loader import, and emitted
+    no sourcemaps.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -192,12 +195,21 @@ checked after `isHtmlEntry`). This target compiles every `*.ts`/`*.tsx`/`*.mts`/
 `*.cts` under the directory as a separate esbuild entry point, with
 `outbase` = the entry dir and `outdir` = `dist`, so the source tree is mirrored
 (`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). `*.d.ts` and `*.test.*`/`*.spec.*`
-are skipped; `bundle: true` keeps each output self-contained (local + loader
-imports inlined, matching the "consumer imports one file" model).
+are skipped.
+
+Code shared across entries is **deduplicated**, not duplicated: `splitting: true`
+(enabled for `esm` output) makes esbuild emit a module imported by 2+ entries
+once into a chunk and import it, rather than inlining a copy into every output.
+A consumer still imports a single entry file — the browser fetches any shared
+chunk transitively. Non-shared local imports and loader-backed imports (`.wgsl`
+text, etc.) stay inlined. The `esbuild` escape hatch can set `splitting: false`
+to force self-contained (duplicating) outputs.
 
 It is mutually exclusive with the HTML target and the default single-entry
 target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
-single entry to run).
+single entry to run). The non-output esbuild options (platform, format, jsx, …)
+come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
+default target so the two can't drift.
 
 Type-checking for this target uses `moduleResolution: "Bundler"` (see
 "Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text via the
