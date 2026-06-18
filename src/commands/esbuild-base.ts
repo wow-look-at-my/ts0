@@ -22,5 +22,8 @@ export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 		// an explicit esbuild.jsx can still override it.
 		...(config.jsx && { jsx: config.jsx }),
 		...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
+		// Custom loaders (e.g. { ".wgsl": "text" }). Spread before the caller's
+		// `config.esbuild` so an explicit esbuild.loader can still override.
+		...(config.loaders && { loader: config.loaders as { [ext: string]: esbuild.Loader } }),
 	};
 }

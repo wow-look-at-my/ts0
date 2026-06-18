@@ -108,9 +108,11 @@ the new behavior is covered.
 adding a new option:
 
 1. Add the field to the `Ts0Config` interface and `DEFAULT_CONFIG`.
-2. If it changes build behavior, thread it through the `esbuildConfig` object
-    in `commands/build.ts`. The user-supplied `esbuild` field is spread last so
-    it stays an escape hatch &mdash; keep it that way.
+2. If it changes build behavior shared by the default and js targets, thread it
+    through `baseEsbuildOptions()` in `commands/esbuild-base.ts` (both targets
+    call it); target-specific options live in `build.ts` / `build-js.ts`. The
+    user-supplied `esbuild` field is spread last so it stays an escape hatch
+    &mdash; keep it that way.
 3. Document it in `README.md`'s configuration table.
 
 `loadConfig()` walks up from the cwd looking for `ts0.json` and falls back to
@@ -184,6 +186,13 @@ up-front check would let later rebuilds/re-runs slip past:
     `test()` owns the loop: an `fsWatch` debounces changes into a `cycle()` that
     type-checks, then runs the tests one-shot only if the check passes. Do not
     switch it back to `node --test --watch`.
+
+Module resolution in the generated tsconfig depends on the target: the default
+single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
+the **js library target** (directory entry) uses `Bundler` resolution to match
+esbuild &mdash; so a library can use extensionless relative imports and
+loader-backed imports (`import x from "./y.wgsl"`) without `.ts` extensions. HTML
+entries skip type-checking entirely.
 
 Module resolution in the generated tsconfig depends on the target: the default
 single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
@@ -279,11 +288,12 @@ come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
 default target so the two can't drift.
 
 Type-checking for this target uses `moduleResolution: "Bundler"` (see
-"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text via the
-`esbuild` escape hatch), the project must provide an ambient
-`declare module "*.wgsl"` so the import type-checks; esbuild does the actual
-inlining. ts0 ships no loaders by default &mdash; configure them through the
-`esbuild.loader` escape hatch.
+"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text), set
+the loader with the `loaders` config field (`{ ".wgsl": "text" }`, threaded into
+esbuild by `baseEsbuildOptions`) and provide an ambient `declare module "*.wgsl"`
+so the import also type-checks; esbuild does the actual inlining. ts0 applies no
+loaders by default. (The `esbuild.loader` escape hatch still works and overrides
+`loaders`.)
 
 ## Distributing via `npm install github:wow-look-at-my/bundler`
 
