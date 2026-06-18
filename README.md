@@ -172,15 +172,16 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
 
 ## How it works
 
-- **Type-checking is mandatory &mdash; there is no way to build or run un-checked
-    code.** `ts0` type-checks before it emits *or executes* anything. `ts0 build`
-    and `ts0 run` both check first &mdash; for `.ts` *and* `.html` entries &mdash;
-    and produce/run nothing if the check fails. Even `ts0 run --no-build`, which
-    skips the bundle and writes no artifact, type-checks first: Node's
-    `--experimental-strip-types` only strips annotations (it does not type-check),
-    so ts0 runs `tsc` itself before handing the sources to Node. In `--watch` mode
-    every rebuild re-checks, so introducing a type error leaves the previous good
-    output in place instead of overwriting it with something broken.
+- **Type-checking is mandatory &mdash; there is no way to build, run, or test
+    un-checked code.** `ts0` type-checks before it emits *or executes* anything.
+    `build`, `run`, and `test` all check first &mdash; for `.ts` *and* `.html`
+    entries &mdash; and produce/run nothing if the check fails. Even
+    `ts0 run --no-build`, which skips the bundle and writes no artifact,
+    type-checks first: Node's `--experimental-strip-types` only strips annotations
+    (it does not type-check), so ts0 runs `tsc` itself before handing sources to
+    Node. There is no escape hatch. In every `--watch` mode (`build` *and* `test`)
+    each cycle re-checks, so introducing a type error stops the run/rebuild and
+    leaves the previous good output in place instead of running something broken.
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
     `ts0.json` (the DOM libs for browser/HTML entries, ESNext for Node), then
     bundles with esbuild. A pure-JS project with no TypeScript sources has nothing
@@ -189,10 +190,11 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     With `--no-build` it type-checks, then skips the bundle and executes the
     sources directly via `node --experimental-strip-types` &mdash; the fast dev
     loop, minus the artifact, but never minus the type-check.
-- **Test:** test files are discovered via the configured glob and handed to
-    `node --test --experimental-strip-types`. (Tests run your code rather than
-    producing a shipped artifact, so `ts0 test` does not impose the type-check
-    gate &mdash; run `ts0 build` for that.)
+- **Test:** `ts0 test` type-checks the whole project, then (only if it passes)
+    runs the discovered test files via `node --test --experimental-strip-types`. A
+    type error anywhere fails the command and no tests run. `ts0 test --watch`
+    re-type-checks and re-runs on every change (ts0 drives the watch loop itself
+    rather than `node --test --watch`, so the check is never skipped).
 
 ## License
 

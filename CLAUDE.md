@@ -67,10 +67,11 @@ end-to-end by:
     build path. (Both HTML samples also now exercise the type-check on the HTML
     path, since HTML entries are type-checked rather than skipped.)
 7. The "Type-check gate blocks broken output" step: a project with a deliberate
-    type error must make **both** `ts0 build` and `ts0 run` exit non-zero and
-    write no `dist/`. This is the regression guard for the type-check gate &mdash;
-    if someone moves the check out of `build()` again, `ts0 run` starts emitting
-    un-checked output and this step fails.
+    type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
+    `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
+    nothing (no `dist/`, no test run). The error strips to valid JS and the test
+    file registers no tests, so a `--no-build` or `test` run would exit 0 if the
+    check were ever skipped &mdash; this step catches exactly that regression.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -105,9 +106,9 @@ defaults plus auto-detected entry. Don't break the no-config-file path.
 
 ## Type-checking
 
-**Type-checking is an unskippable gate: no path builds OR runs code that hasn't
-passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the single
-chokepoint, called from two places:
+**Type-checking is an unskippable gate: there is NO way to build or run code
+that hasn't passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the
+single chokepoint, called from every command that emits or executes code:
 
 - `build()` runs it before it emits anything and returns a failed `BuildResult`
     (no output written) on failure. Every path that produces output goes through
@@ -120,16 +121,22 @@ chokepoint, called from two places:
     does **not** type-check, so without this gate `ts0 run --no-build` would
     execute broken code. `--no-build` therefore skips only the bundle/artifact,
     never the check.
+- `test()` runs it before spawning `node --test`. The test runner uses
+    `--experimental-strip-types` too, so an un-checked test run would execute an
+    invalid program. A type error anywhere in the project fails `ts0 test` and no
+    test process is spawned.
 
-The one path that does not impose the gate is `ts0 test` (it runs your code
-rather than producing a shipped artifact, and you often want to run a test while
-the project has an unrelated type error). Use `ts0 build` to enforce types.
+There is intentionally **no escape hatch** &mdash; every command that runs or
+emits code type-checks first. If you add a new command (or a new branch in an
+existing one) that runs/emits code, it MUST call `runTypecheck()` first and bail
+on failure. The only thing `--no-build` and the like may skip is the
+bundle/artifact, never the check.
 
 `runTypecheck()` writes a temporary `.ts0-tsconfig.json` (gitignored), runs
 `tsc --noEmit` against it, and deletes it in a `finally`. The TypeScript binary
 is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
-project doesn't need its own `typescript` install. Preserve both behaviors. Both
-`build()` and `run()` already hold a loaded config, so they call
+project doesn't need its own `typescript` install. Preserve both behaviors.
+`build()`, `run()`, and `test()` each already hold a loaded config, so they call
 `runTypecheck(config, rootDir)` directly rather than re-loading.
 
 Key details of the generated tsconfig:
@@ -151,13 +158,20 @@ Key details of the generated tsconfig:
     type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
     with `TS17004`. A nested project is type-checked on its own when built directly.
 
-**Watch mode re-checks on every rebuild** (a one-shot up-front check would let
-later rebuilds slip past). The JS path adds `typecheckPlugin` &mdash; an esbuild
-`onStart` hook that runs `runTypecheck()` and returns errors on failure, so
-esbuild skips writing output for a rebuild that doesn't type-check. The HTML path
-threads a `typecheck` callback into `buildHtml`, which `buildOnce` runs before
-each rebuild and bails (writing nothing) on failure. In both cases the previous
-good output stays in place rather than being overwritten with something broken.
+**Watch mode re-checks on every cycle** for all three commands &mdash; a one-shot
+up-front check would let later rebuilds/re-runs slip past:
+
+- `ts0 build --watch` (JS) adds `typecheckPlugin`, an esbuild `onStart` hook that
+    runs `runTypecheck()` and returns errors on failure, so esbuild skips writing
+    output for a rebuild that doesn't type-check. The HTML path threads a
+    `typecheck` callback into `buildHtml`, which `buildOnce` runs before each
+    rebuild and bails (writing nothing) on failure. Either way the previous good
+    output stays in place rather than being overwritten with something broken.
+- `ts0 test --watch` does **not** use `node --test --watch` (it re-runs tests on
+    change without re-type-checking, which would run an invalid program). Instead
+    `test()` owns the loop: an `fsWatch` debounces changes into a `cycle()` that
+    type-checks, then runs the tests one-shot only if the check passes. Do not
+    switch it back to `node --test --watch`.
 
 ## JSX
 
