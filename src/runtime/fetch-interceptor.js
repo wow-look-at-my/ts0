@@ -29,7 +29,9 @@
 	}
 
 	window.fetch = function (input, init) {
-		const url = typeof input === "string" ? input : (input && input.url) || "";
+		// input may be a string, a URL (the documented `fetch(new URL(...))`
+		// form -- URL exposes .href, not .url), or a Request (.url).
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input && input.url) || "";
 		let pathname;
 		try {
 			pathname = new URL(url, document.baseURI).pathname;
