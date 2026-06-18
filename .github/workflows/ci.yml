@@ -16,6 +16,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Unit tests (runtime fetch interceptor)
+        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
 
@@ -65,6 +68,28 @@ jobs:
       - name: Test test command
         working-directory: /tmp/test-project
         run: ts0 test
+
+      - name: Type-check gate blocks broken output
+        run: |
+          # A type error must make EVERY code path -- build, run, run --no-build,
+          # and test -- fail and emit/execute nothing. This is the regression
+          # guard for "there must be no way to run an invalid program". The error
+          # (string assigned to number) strips to valid JS and the test file
+          # registers no tests, so a --no-build run or a test run would exit 0 if
+          # the type-check were ever skipped: this catches exactly that hole.
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
+          mkdir -p "$dir/src"
+          printf 'const n: number = "nope";\nexport {};\n' > "$dir/src/main.ts"
+          printf 'export {};\n' > "$dir/src/noop.test.ts"
+          cd "$dir"
+          if ts0 build; then echo "FAIL: ts0 build succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite a type error"; exit 1; fi
+          if ts0 run; then echo "FAIL: ts0 run succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 run wrote dist/ despite a type error"; exit 1; fi
+          if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite a type error"; exit 1; fi
+          if ts0 test; then echo "FAIL: ts0 test ran tests despite a type error"; exit 1; fi
+          echo "Type-check gate OK: build, run, run --no-build, and test all refused broken code"
 
       - name: Test basic sample
         working-directory: samples/basic
