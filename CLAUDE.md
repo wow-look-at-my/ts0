@@ -51,8 +51,11 @@ npm run build                                       # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
 ```
 
-There is currently no unit test suite for `ts0` itself. CI exercises the CLI
-end-to-end by:
+The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
+`node --experimental-strip-types --test`), which evaluates the single-file fetch
+interceptor against a window/document shim and asserts it serves embedded assets
+for string, `URL`-object, and `Request` fetch inputs. Otherwise CI exercises the
+CLI end-to-end by:
 
 1. Building `dist/ts0` from source.
 2. `npm link`ing it.
