@@ -72,7 +72,7 @@ export function isHtmlEntry(entry: string | undefined): boolean {
 export async function buildHtml(
 	config: Ts0Config,
 	rootDir: string,
-	options?: { watch?: boolean },
+	options?: { watch?: boolean; typecheck?: () => Promise<{ success: boolean; output: string }> },
 ): Promise<BuildResult> {
 	const startTime = performance.now();
 
@@ -93,6 +93,17 @@ export async function buildHtml(
 		: resolve(rootDir, config.outdir || "dist", basename(config.entry));
 
 	const buildOnce = async (): Promise<{ errors: string[] }> => {
+		// In watch mode build() can't gate up front (later rebuilds would slip
+		// past), so it hands us the type-check to run before each rebuild. If it
+		// fails we report the errors and write nothing -- the previous good
+		// output stays in place. Non-watch builds are already gated by build()
+		// and pass no typecheck here.
+		if (options?.typecheck) {
+			const check = await options.typecheck();
+			if (!check.success) {
+				return { errors: [`Type-checking failed:\n${check.output}`] };
+			}
+		}
 		const html = readFileSync(htmlPath, "utf-8");
 		const result = await processHtml(html, htmlSourceDir, rootDir, config);
 		mkdirSync(dirname(outFile), { recursive: true });

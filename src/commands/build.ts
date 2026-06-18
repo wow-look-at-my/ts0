@@ -23,6 +23,7 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 	const startTime = performance.now();
 	const { config: loaded, rootDir } = loadConfig();
 	const config = applyOverrides(loaded, options?.overrides);
+	const watch = !!options?.watch;
 
 	if (!config.entry) {
 		return {
@@ -33,8 +34,32 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 		};
 	}
 
+	// Type-checking is a hard gate: ts0 never emits output from sources that
+	// haven't passed tsc. A one-shot build checks once, here, before anything
+	// is written -- so every caller of build() (including `ts0 run`) is covered,
+	// not just the `build` command. A watch build can't use this single check
+	// (later rebuilds would slip past it), so it re-checks on every rebuild
+	// instead: the esbuild onStart plugin below for the JS path, and buildHtml's
+	// per-rebuild hook for HTML. Either way, no artifact is produced from code
+	// that doesn't type-check.
+	if (!watch) {
+		console.log("Type-checking...");
+		const check = await runTypecheck(config, rootDir);
+		if (!check.success) {
+			return {
+				success: false,
+				outputFiles: [],
+				errors: [`Type-checking failed:\n${check.output}`],
+				duration: performance.now() - startTime,
+			};
+		}
+	}
+
 	if (isHtmlEntry(config.entry)) {
-		return buildHtml(config, rootDir, options);
+		return buildHtml(config, rootDir, {
+			watch,
+			typecheck: watch ? () => runTypecheck(config, rootDir) : undefined,
+		});
 	}
 
 	if (isJsTarget(config.entry, rootDir)) {
@@ -57,8 +82,16 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 		...config.esbuild,
 	};
 
+	// Watch rebuilds re-run the type-check via an esbuild onStart hook. esbuild
+	// will not write output for a build whose onStart reports errors, so a
+	// rebuild that fails type-checking leaves the previous good output in place.
+	// Prepended so it runs before any user-supplied plugin from the escape hatch.
+	if (watch) {
+		esbuildConfig.plugins = [typecheckPlugin(config, rootDir), ...(esbuildConfig.plugins ?? [])];
+	}
+
 	try {
-		if (options?.watch) {
+		if (watch) {
 			const ctx = await esbuild.context(esbuildConfig);
 			await ctx.watch();
 			console.log("Watching for changes...");
@@ -147,22 +180,37 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 	}
 }
 
-export async function typecheck(overrides?: BuildOverrides): Promise<{ success: boolean; output: string }> {
-	const { config: loaded, rootDir } = loadConfig();
-	const config = applyOverrides(loaded, overrides);
+// runTypecheck type-checks the project with `tsc --noEmit` using a temporary
+// tsconfig derived from the ts0 config. It is the single source of truth for
+// "does this project type-check"; build() (for build/run) and run() (for the
+// --no-build path) call it before emitting OR executing anything, so it is the
+// chokepoint that makes type-checking unskippable.
+export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ success: boolean; output: string }> {
+	const nestedProjects = findNestedProjectDirs(rootDir);
+	// A nested project (its own ts0.json) may use different settings -- e.g.
+	// JSX -- that would make the parent's type-check fail on it; it is
+	// type-checked on its own when built directly. The output dir is excluded
+	// so emitted artifacts aren't re-checked.
+	const excludeDirs = [config.outdir, ...nestedProjects].filter((d): d is string => !!d);
 
-	// Skip type-checking for HTML entries: an HTML project may have no .ts
-	// files at all (it can be plain JS), and the bundling step delegates to
-	// esbuild's stdin/css loaders which don't honour TypeScript types
-	// anyway. The entry's <script src> targets are still type-checked
-	// transitively if they're .ts files via the bundler.
-	if (isHtmlEntry(config.entry)) {
-		return { success: true, output: "Skipped (HTML entry)." };
+	// Nothing to check: a project with no TypeScript sources at all (e.g. a
+	// plain-JS HTML entry). tsc would abort with TS18003 "No inputs were
+	// found", so treat an empty source set as a vacuous pass -- there are no
+	// types that could be broken.
+	if (!hasTypeScriptSources(rootDir, excludeDirs)) {
+		return { success: true, output: "No TypeScript sources to check." };
 	}
 
+	// Browser code -- an explicit "browser" target or any HTML entry (always
+	// browser) -- needs the DOM lib so document/fetch/addEventListener and
+	// friends resolve. Node code gets the ESNext lib only; its globals come
+	// from @types/node. Without this, every HTML/browser project would fail
+	// type-checking on "Cannot find name 'document'".
+	const isBrowser = config.target === "browser" || isHtmlEntry(config.entry);
+
 	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
-	// thread the matching tsc options and widen the include glob so .tsx files
-	// are type-checked (esbuild's jsx setting alone does not type-check JSX).
+	// thread the matching tsc options so .tsx files are type-checked (esbuild's
+	// jsx setting alone does not type-check JSX).
 	//
 	// The js (library) target is bundled by esbuild, so type-check it with
 	// bundler module resolution: it matches esbuild's resolver, permits
@@ -174,6 +222,7 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 		target: "ESNext",
 		module: jsTarget ? "ESNext" : "NodeNext",
 		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
+		lib: isBrowser ? ["ESNext", "DOM", "DOM.Iterable"] : ["ESNext"],
 		strict: config.strict,
 		noEmit: true,
 		skipLibCheck: true,
@@ -191,11 +240,7 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 		// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
 		// TypeScript variants are type-checked too.
 		include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
-		// Exclude node_modules, the output dir, and any nested ts0 projects.
-		// A nested project (its own ts0.json) may use different settings --
-		// e.g. JSX -- that would make the parent's type-check fail on it; it
-		// is type-checked on its own when built directly.
-		exclude: ["node_modules", config.outdir, ...findNestedProjectDirs(rootDir)].filter(Boolean),
+		exclude: ["node_modules", ...excludeDirs],
 	};
 
 	const { execSync } = await import("node:child_process");
@@ -205,27 +250,76 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 	const require = createRequire(import.meta.url);
 	const tscPath = require.resolve("typescript/bin/tsc");
 
-	try {
-		// Write temporary tsconfig
-		const { writeFileSync, unlinkSync } = await import("node:fs");
-		const tempTsconfig = join(rootDir, ".ts0-tsconfig.json");
-		writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
+	// Write temporary tsconfig
+	const { writeFileSync, unlinkSync } = await import("node:fs");
+	const tempTsconfig = join(rootDir, ".ts0-tsconfig.json");
+	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
 
-		try {
-			const output = execSync(`node ${tscPath} --project ${tempTsconfig}`, {
-				cwd: rootDir,
-				encoding: "utf-8",
-				stdio: ["pipe", "pipe", "pipe"],
-			});
-			return { success: true, output: output || "No type errors found." };
-		} finally {
-			unlinkSync(tempTsconfig);
-		}
+	try {
+		const output = execSync(`node ${tscPath} --project ${tempTsconfig}`, {
+			cwd: rootDir,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return { success: true, output: output || "No type errors found." };
 	} catch (err) {
 		const error = err as { stdout?: string; stderr?: string };
 		return {
 			success: false,
 			output: error.stdout || error.stderr || String(err),
 		};
+	} finally {
+		unlinkSync(tempTsconfig);
 	}
+}
+
+// typecheckPlugin runs the type-check at the start of every esbuild build,
+// including each rebuild in watch mode. Returning errors from onStart makes
+// esbuild fail the build and skip writing output, so a rebuild that doesn't
+// type-check cannot emit a bundle. Exported so the js library target
+// (build-js.ts), which has its own esbuild context, gates its watch rebuilds
+// the same way.
+export function typecheckPlugin(config: Ts0Config, rootDir: string): esbuild.Plugin {
+	return {
+		name: "ts0-typecheck",
+		setup(pluginBuild) {
+			pluginBuild.onStart(async () => {
+				const check = await runTypecheck(config, rootDir);
+				if (!check.success) {
+					return { errors: [{ text: `Type-checking failed:\n${check.output}` }] };
+				}
+				return null;
+			});
+		},
+	};
+}
+
+// hasTypeScriptSources reports whether the project contains any TypeScript
+// source file (.ts/.tsx/.mts/.cts, excluding .d.ts declarations) outside
+// node_modules, the output dir, and nested ts0 projects. Used to skip the
+// type-check for a project with no TS to check (e.g. a plain-JS HTML entry),
+// which would otherwise make tsc abort with TS18003.
+function hasTypeScriptSources(rootDir: string, excludeDirs: string[]): boolean {
+	const excluded = new Set(excludeDirs.map((d) => d.split(/[\\/]/).join("/")));
+	let found = false;
+	const walk = (dir: string): void => {
+		for (const name of readdirSync(dir)) {
+			if (found) return;
+			if (name === "node_modules" || name.startsWith(".")) continue;
+			const p = join(dir, name);
+			const rel = relative(rootDir, p).split(/[\\/]/).join("/");
+			if (excluded.has(rel)) continue;
+			if (statSync(p).isDirectory()) {
+				walk(p);
+				continue;
+			}
+			const isDeclaration = /\.d\.(ts|mts|cts)$/i.test(name);
+			if (!isDeclaration && /\.(ts|tsx|mts|cts)$/i.test(name)) {
+				found = true;
+				return;
+			}
+		}
+	};
+	walk(rootDir);
+	return found;
 }
