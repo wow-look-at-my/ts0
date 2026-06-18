@@ -19,14 +19,16 @@ src/
     config.ts           # ts0.json loader, defaults, entry auto-detection
     commands/
         init.ts         # scaffolds ts0.json + src/ + package.json
-        build.ts        # tsc --noEmit, then esbuild bundle (dispatches HTML)
+        build.ts        # tsc --noEmit, then esbuild bundle (dispatches HTML/js)
         build-html.ts   # bundles an .html entry into a single inlined .html
+        build-js.ts     # compiles a directory entry into a parallel .js tree
         run.ts          # build (or strip-types) + node
         test.ts         # node --test on discovered test files
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
     html-jsx/           # HTML+JSX (Preact, automatic runtime) regression sample
+    js/                 # directory-entry "js" library target sample (CI)
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -65,6 +67,10 @@ end-to-end by:
     `React.createElement`/`React.Fragment` &mdash; the regression guard for the
     "React is not defined" bug where JSX config wasn't threaded into the HTML
     build path.
+7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+    the js library target compiled every `src/**/*.ts` to a parallel
+    `dist/**/*.js`, skipped `*.d.ts`, inlined a cross-module import and a
+    `.frag` text-loader import, and emitted no sourcemaps.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -108,6 +114,13 @@ The generated tsconfig excludes nested ts0 projects (any subdirectory with its
 own `ts0.json`, via `findNestedProjectDirs`). Without this, building ts0 itself
 would type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
 with `TS17004`. A nested project is type-checked on its own when built directly.
+
+Module resolution in the generated tsconfig depends on the target: the default
+single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
+the **js library target** (directory entry) uses `Bundler` resolution to match
+esbuild &mdash; so a library can use extensionless relative imports and
+loader-backed imports (`import x from "./y.wgsl"`) without `.ts` extensions. HTML
+entries skip type-checking entirely.
 
 ## JSX
 
@@ -170,6 +183,28 @@ both running modes work:
 `package.json`'s `"files"` ships both `dist/ts0` and
 `src/runtime/fetch-interceptor.js` so installs from a published tarball or
 git URL find the template.
+
+## js (library) target
+
+When `entry` resolves to a **directory** (not a `.ts`/`.html` file), `build.ts`
+delegates to `commands/build-js.ts` (`isJsTarget` does the directory check;
+checked after `isHtmlEntry`). This target compiles every `*.ts`/`*.tsx`/`*.mts`/
+`*.cts` under the directory as a separate esbuild entry point, with
+`outbase` = the entry dir and `outdir` = `dist`, so the source tree is mirrored
+(`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). `*.d.ts` and `*.test.*`/`*.spec.*`
+are skipped; `bundle: true` keeps each output self-contained (local + loader
+imports inlined, matching the "consumer imports one file" model).
+
+It is mutually exclusive with the HTML target and the default single-entry
+target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
+single entry to run).
+
+Type-checking for this target uses `moduleResolution: "Bundler"` (see
+"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text via the
+`esbuild` escape hatch), the project must provide an ambient
+`declare module "*.wgsl"` so the import type-checks; esbuild does the actual
+inlining. ts0 ships no loaders by default &mdash; configure them through the
+`esbuild.loader` escape hatch.
 
 ## Distributing via `npm install github:wow-look-at-my/bundler`
 

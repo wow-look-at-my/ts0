@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
+import { buildJs, isJsTarget } from "./build-js.ts";
 
 export interface BuildResult {
 	success: boolean;
@@ -33,6 +34,10 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 
 	if (isHtmlEntry(config.entry)) {
 		return buildHtml(config, rootDir, options);
+	}
+
+	if (isJsTarget(config.entry, rootDir)) {
+		return buildJs(config, rootDir, options);
 	}
 
 	const esbuildConfig: esbuild.BuildOptions = {
@@ -170,10 +175,17 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
 	// thread the matching tsc options and widen the include glob so .tsx files
 	// are type-checked (esbuild's jsx setting alone does not type-check JSX).
+	//
+	// The js (library) target is bundled by esbuild, so type-check it with
+	// bundler module resolution: it matches esbuild's resolver, permits
+	// extensionless relative imports and loader-backed imports (e.g.
+	// `import src from "./shader.wgsl"`), and doesn't force `.ts` extensions on
+	// library source. The default single-entry target keeps NodeNext.
+	const jsTarget = isJsTarget(config.entry, rootDir);
 	const compilerOptions: Record<string, unknown> = {
 		target: "ESNext",
-		module: "NodeNext",
-		moduleResolution: "NodeNext",
+		module: jsTarget ? "ESNext" : "NodeNext",
+		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
 		strict: config.strict,
 		noEmit: true,
 		skipLibCheck: true,

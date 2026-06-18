@@ -79,7 +79,7 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 
 | Field       | Type                  | Default            | Notes                                                         |
 | ----------- | --------------------- | ------------------ | ------------------------------------------------------------- |
-| `entry`     | `string`              | auto-detected      | Entry point relative to the config file. May be `.ts` or `.html` |
+| `entry`     | `string`              | auto-detected      | Entry point relative to the config file. A `.ts` file (single bundle), a `.html` file (inlined HTML), or a **directory** (the [js library target](#js-library-target)) |
 | `outfile`   | `string`              | &mdash;            | Single-file output. Adds a `#!/usr/bin/env node` shebang for JS |
 | `outdir`    | `string`              | `"dist"`           | Used when `outfile` is not set                                |
 | `target`    | `"node" \| "browser"` | `"node"`           | esbuild platform (ignored for HTML entries &mdash; always browser) |
@@ -145,6 +145,41 @@ via JS imports instead.
 The fetch interceptor exposes `window.__ts0_embedded_paths__` &mdash; an array of all
 embedded asset keys. Client code can use this to enumerate available assets at runtime
 (e.g. to discover all `.xml` files in a data directory without a hardcoded manifest).
+
+### js (library) target
+
+If `entry` is a **directory**, `ts0 build` switches to the "js" library target:
+every `*.ts`/`*.tsx` file under that directory is compiled to a parallel `*.js`
+file under `outdir`, preserving the directory structure
+(`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). This is the shape a library
+deployed to static hosting (GitHub Pages, a CDN) wants — consumers import an
+individual module by URL.
+
+```json
+{
+    "entry": "src",
+    "target": "browser",
+    "format": "esm",
+    "sourcemap": false,
+    "esbuild": { "loader": { ".wgsl": "text" } }
+}
+```
+
+- Each file is its own esbuild entry point (no cross-module entry splitting), so
+    every output module is **self-contained**: its local imports and any
+    loader-backed imports (e.g. `import src from "./shader.wgsl"` with the
+    `loader` escape hatch above) are inlined.
+- Declaration files (`*.d.ts`) and tests (`*.test.*`, `*.spec.*`) are skipped.
+- Type-checking uses **bundler** module resolution (matching esbuild), so
+    extensionless relative imports and loader-backed imports type-check without
+    forcing `.ts` extensions on library source. Add an ambient declaration
+    (e.g. `declare module "*.wgsl" { const s: string; export default s; }`) so
+    loader imports type-check.
+- `ts0 run` does not apply to this target (there is no single entry to run);
+    use `ts0 build`. The single-file `outfile` option is likewise ignored —
+    output always goes to `outdir`.
+
+See `samples/js` for a complete example.
 
 ### JSX / TSX
 
