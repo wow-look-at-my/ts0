@@ -31,7 +31,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const result = await build();
 			if (!result.success) {
 				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(`	${e}`));
+				result.errors.forEach((e) => console.error(e));
 				process.exit(1);
 			}
 			// For specific files with outfile config, still need outdir
@@ -53,7 +53,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const result = await build();
 			if (!result.success) {
 				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(`	${e}`));
+				result.errors.forEach((e) => console.error(e));
 				process.exit(1);
 			}
 			// Use outfile if specified, otherwise derive from outdir

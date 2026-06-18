@@ -66,6 +66,22 @@ jobs:
         working-directory: /tmp/test-project
         run: ts0 test
 
+      - name: Type-check gate blocks broken output
+        run: |
+          # A type error must make BOTH build and run fail and emit no output.
+          # run builds first, so it must refuse too -- this is the regression
+          # guard for "outputs that are probably broken is not a feature".
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
+          mkdir -p "$dir/src"
+          printf 'const n: number = "nope";\nexport { n };\n' > "$dir/src/main.ts"
+          cd "$dir"
+          if ts0 build; then echo "FAIL: ts0 build succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite a type error"; exit 1; fi
+          if ts0 run; then echo "FAIL: ts0 run succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 run wrote dist/ despite a type error"; exit 1; fi
+          echo "Type-check gate OK: build and run both refused to emit broken output"
+
       - name: Test basic sample
         working-directory: samples/basic
         run: |

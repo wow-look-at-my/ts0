@@ -32,13 +32,13 @@ ts0 build     # produce a bundled output
 | ---------------- | ------------------------------------------------------ |
 | `ts0 init`       | Create `ts0.json` and starter files in the cwd         |
 | `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild|
-| `ts0 run [file]` | Build, then run the entry point (or a specific file)   |
+| `ts0 run [file]` | Type-check, build, then run the entry point (or a specific file) |
 | `ts0 test [pat]` | Run tests via Node's built-in test runner              |
 
 ### Flags
 
 - `--watch`, `-w` &mdash; watch mode (`build`, `test`)
-- `--no-build` &mdash; skip the build step and run sources directly via `--experimental-strip-types` (`run`)
+- `--no-build` &mdash; skip the build step (and the type-check) and run sources directly via `--experimental-strip-types` (`run`)
 - `--entry <path>` &mdash; override the configured entry for this `build` invocation
 - `--outfile <path>` &mdash; override `outfile`; produces a single file at this path (`build`)
 - `--outdir <path>` &mdash; override `outdir` (`build`)
@@ -118,6 +118,10 @@ that runs from disk (`file://`) with no asset tree alongside it. Specifically:
     keeps resolving in the standalone bundle. Set `"embedAssets": false` to disable.
 - External URLs (`https://`, `//`, `data:`) are left untouched.
 
+The project's `.ts`/`.tsx` files are type-checked (with the DOM lib) before any
+HTML is written, so a type error in an HTML project's scripts fails the build just
+like it would for a Node entry.
+
 ```html
 <!-- index.html -->
 <link rel="stylesheet" href="./src/styles.css" />
@@ -168,10 +172,21 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
 
 ## How it works
 
+- **Type-checking is mandatory.** `ts0` never emits output that hasn't passed
+    `tsc`. Both `ts0 build` and `ts0 run` type-check first &mdash; for `.ts` *and*
+    `.html` entries &mdash; and produce nothing if the check fails. In `--watch`
+    mode every rebuild re-checks, so introducing a type error leaves the previous
+    good output in place instead of overwriting it with something broken. The one
+    deliberate exception is `ts0 run --no-build`, which executes your TypeScript
+    directly via Node and writes no build artifact (a fast dev loop with no
+    type-check, like `tsx`/`ts-node`).
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
-    `ts0.json`, then bundles with esbuild.
-- **Run:** with `--no-build`, `ts0 run` shells out to `node --experimental-strip-types`
-    to execute TypeScript directly &mdash; no build step in the dev loop.
+    `ts0.json` (the DOM libs for browser/HTML entries, ESNext for Node), then
+    bundles with esbuild. A pure-JS project with no TypeScript sources has nothing
+    to check and builds straight through.
+- **Run:** `ts0 run` builds (type-check + bundle) then runs the output with Node.
+    With `--no-build` it skips the build and executes sources directly via
+    `node --experimental-strip-types` &mdash; no type-check, no artifact.
 - **Test:** test files are discovered via the configured glob and handed to
     `node --test --experimental-strip-types`.
 
