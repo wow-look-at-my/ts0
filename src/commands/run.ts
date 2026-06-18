@@ -3,6 +3,7 @@ import { join, basename } from "node:path";
 import { loadConfig } from "../config.ts";
 import { build, runTypecheck } from "./build.ts";
 import { isHtmlEntry } from "./build-html.ts";
+import { isJsTarget } from "./build-js.ts";
 
 export interface RunOptions {
 	// Skip build step (use for development with --experimental-strip-types)
@@ -18,6 +19,11 @@ export async function run(options: RunOptions = {}): Promise<void> {
 
 	if (isHtmlEntry(options.file ?? config.entry)) {
 		console.error("ts0 run does not support HTML entries. Use 'ts0 build' to produce a bundled HTML file.");
+		process.exit(1);
+	}
+
+	if (isJsTarget(options.file ?? config.entry, rootDir)) {
+		console.error("ts0 run does not support the js (library) target. Use 'ts0 build' to compile the module tree.");
 		process.exit(1);
 	}
 

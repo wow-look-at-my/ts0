@@ -19,14 +19,17 @@ src/
     config.ts           # ts0.json loader, defaults, entry auto-detection
     commands/
         init.ts         # scaffolds ts0.json + src/ + package.json
-        build.ts        # type-check gate (runTypecheck) + esbuild bundle (dispatches HTML)
+        build.ts        # type-check gate (runTypecheck) + esbuild bundle (dispatches HTML/js)
         build-html.ts   # bundles an .html entry into a single inlined .html
+        build-js.ts     # compiles a directory entry into a parallel .js tree (type-checked)
+        esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
         run.ts          # type-check, then build+node (or strip-types+node for --no-build)
-        test.ts         # node --test on discovered test files
+        test.ts         # type-check, then node --test on discovered test files
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
     html-jsx/           # HTML+JSX (Preact, automatic runtime) regression sample
+    js/                 # directory-entry "js" library target sample (CI)
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -51,8 +54,11 @@ npm run build                                       # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
 ```
 
-There is currently no unit test suite for `ts0` itself. CI exercises the CLI
-end-to-end by:
+The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
+`node --experimental-strip-types --test`), which evaluates the single-file fetch
+interceptor against a window/document shim and asserts it serves embedded assets
+for string, `URL`-object, and `Request` fetch inputs. Otherwise CI exercises the
+CLI end-to-end by:
 
 1. Building `dist/ts0` from source.
 2. `npm link`ing it.
@@ -66,7 +72,13 @@ end-to-end by:
     "React is not defined" bug where JSX config wasn't threaded into the HTML
     build path. (Both HTML samples also now exercise the type-check on the HTML
     path, since HTML entries are type-checked rather than skipped.)
-7. The "Type-check gate blocks broken output" step: a project with a deliberate
+7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+    the js library target compiled every `src/**/*.ts` to a parallel
+    `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
+    chunk (the shared body appears in exactly one output file, not copied into
+    each importer), inlined a non-shared `.frag` text-loader import, and emitted
+    no sourcemaps.
+8. The "Type-check gate blocks broken output" step: a project with a deliberate
     type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
     `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
     nothing (no `dist/`, no test run). The error strips to valid JS and the test
@@ -173,6 +185,13 @@ up-front check would let later rebuilds/re-runs slip past:
     type-checks, then runs the tests one-shot only if the check passes. Do not
     switch it back to `node --test --watch`.
 
+Module resolution in the generated tsconfig depends on the target: the default
+single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
+the **js library target** (directory entry) uses `Bundler` resolution to match
+esbuild &mdash; so a library can use extensionless relative imports and
+loader-backed imports (`import x from "./y.wgsl"`) without `.ts` extensions. HTML
+entries skip type-checking entirely.
+
 ## JSX
 
 `jsx`/`jsxImportSource` are threaded into esbuild from **both** the Node/TS path
@@ -234,6 +253,37 @@ both running modes work:
 `package.json`'s `"files"` ships both `dist/ts0` and
 `src/runtime/fetch-interceptor.js` so installs from a published tarball or
 git URL find the template.
+
+## js (library) target
+
+When `entry` resolves to a **directory** (not a `.ts`/`.html` file), `build.ts`
+delegates to `commands/build-js.ts` (`isJsTarget` does the directory check;
+checked after `isHtmlEntry`). This target compiles every `*.ts`/`*.tsx`/`*.mts`/
+`*.cts` under the directory as a separate esbuild entry point, with
+`outbase` = the entry dir and `outdir` = `dist`, so the source tree is mirrored
+(`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). `*.d.ts` and `*.test.*`/`*.spec.*`
+are skipped.
+
+Code shared across entries is **deduplicated**, not duplicated: `splitting: true`
+(enabled for `esm` output) makes esbuild emit a module imported by 2+ entries
+once into a chunk and import it, rather than inlining a copy into every output.
+A consumer still imports a single entry file — the browser fetches any shared
+chunk transitively. Non-shared local imports and loader-backed imports (`.wgsl`
+text, etc.) stay inlined. The `esbuild` escape hatch can set `splitting: false`
+to force self-contained (duplicating) outputs.
+
+It is mutually exclusive with the HTML target and the default single-entry
+target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
+single entry to run). The non-output esbuild options (platform, format, jsx, …)
+come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
+default target so the two can't drift.
+
+Type-checking for this target uses `moduleResolution: "Bundler"` (see
+"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text via the
+`esbuild` escape hatch), the project must provide an ambient
+`declare module "*.wgsl"` so the import type-checks; esbuild does the actual
+inlining. ts0 ships no loaders by default &mdash; configure them through the
+`esbuild.loader` escape hatch.
 
 ## Distributing via `npm install github:wow-look-at-my/bundler`
 

@@ -16,6 +16,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Unit tests (runtime fetch interceptor)
+        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
 
@@ -138,6 +141,34 @@ jobs:
           grep -q 'preact/jsx-runtime' dist/index.html
           # The rendered component's text must survive bundling.
           grep -q 'ts0 + Preact' dist/index.html
+
+      - name: Test js sample
+        working-directory: samples/js
+        run: |
+          rm -rf dist
+          ts0 build
+          # Directory entry -> "js" library target: every src/**/*.ts is
+          # compiled to a parallel dist/**/*.js, structure preserved.
+          test -f dist/math/vec.js
+          test -f dist/math/shape.js
+          test -f dist/gfx/shader.js
+          # Declaration files are not compiled to outputs.
+          ! test -e dist/shaders.js
+          # sourcemap:false in ts0.json -> no .map files.
+          ! test -e dist/math/vec.js.map
+          # ESM output.
+          grep -q 'export' dist/math/vec.js
+          # No duplication: add() is shared (vec.ts is an entry AND shape.ts
+          # imports it), so it must be emitted once into a chunk and imported,
+          # never inlined into each output. Assert the body lives in exactly one
+          # file, a chunk exists, and shape.js imports it rather than inlining.
+          test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
+          ls dist/chunk-*.js >/dev/null
+          grep -q 'chunk-' dist/math/shape.js
+          ! grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
+          # Loader escape hatch: a non-shared .frag import is inlined as text
+          # (proves esbuild's text loader ran; a JS-module import would error).
+          grep -q 'FRAG_MARKER' dist/gfx/shader.js
 
       - name: Upload html sample build
         if: always()

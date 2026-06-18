@@ -3,6 +3,8 @@ import { join, relative } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
+import { buildJs, isJsTarget } from "./build-js.ts";
+import { baseEsbuildOptions } from "./esbuild-base.ts";
 
 export interface BuildResult {
 	success: boolean;
@@ -60,14 +62,13 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 		});
 	}
 
+	if (isJsTarget(config.entry, rootDir)) {
+		return buildJs(config, rootDir, options);
+	}
+
 	const esbuildConfig: esbuild.BuildOptions = {
 		entryPoints: [join(rootDir, config.entry)],
-		bundle: true,
-		platform: config.target === "node" ? "node" : "browser",
-		format: config.format,
-		minify: config.minify,
-		sourcemap: config.sourcemap,
-		target: "esnext",
+		...baseEsbuildOptions(config),
 		// Single file output with shebang, or directory output
 		...(config.outfile
 			? {
@@ -77,15 +78,7 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 			: {
 					outdir: join(rootDir, config.outdir || "dist"),
 				}),
-		// Node-specific settings
-		...(config.target === "node" && {
-			packages: "external",
-		}),
-		// JSX support (esbuild). Threaded before the escape hatch so an
-		// explicit esbuild.jsx can still override it.
-		...(config.jsx && { jsx: config.jsx }),
-		...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
-		// User overrides
+		// User overrides (escape hatch — spread last)
 		...config.esbuild,
 	};
 
@@ -218,10 +211,17 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
 	// thread the matching tsc options so .tsx files are type-checked (esbuild's
 	// jsx setting alone does not type-check JSX).
+	//
+	// The js (library) target is bundled by esbuild, so type-check it with
+	// bundler module resolution: it matches esbuild's resolver, permits
+	// extensionless relative imports and loader-backed imports (e.g.
+	// `import src from "./shader.wgsl"`), and doesn't force `.ts` extensions on
+	// library source. The default single-entry target keeps NodeNext.
+	const jsTarget = isJsTarget(config.entry, rootDir);
 	const compilerOptions: Record<string, unknown> = {
 		target: "ESNext",
-		module: "NodeNext",
-		moduleResolution: "NodeNext",
+		module: jsTarget ? "ESNext" : "NodeNext",
+		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
 		lib: isBrowser ? ["ESNext", "DOM", "DOM.Iterable"] : ["ESNext"],
 		strict: config.strict,
 		noEmit: true,
@@ -276,8 +276,10 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 // typecheckPlugin runs the type-check at the start of every esbuild build,
 // including each rebuild in watch mode. Returning errors from onStart makes
 // esbuild fail the build and skip writing output, so a rebuild that doesn't
-// type-check cannot emit a bundle.
-function typecheckPlugin(config: Ts0Config, rootDir: string): esbuild.Plugin {
+// type-check cannot emit a bundle. Exported so the js library target
+// (build-js.ts), which has its own esbuild context, gates its watch rebuilds
+// the same way.
+export function typecheckPlugin(config: Ts0Config, rootDir: string): esbuild.Plugin {
 	return {
 		name: "ts0-typecheck",
 		setup(pluginBuild) {
