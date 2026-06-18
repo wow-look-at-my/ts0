@@ -1,0 +1,9 @@
+{
+	"entry": "src",
+	"target": "browser",
+	"format": "esm",
+	"sourcemap": false,
+	"esbuild": {
+		"loader": { ".frag": "text" }
+	}
+}
