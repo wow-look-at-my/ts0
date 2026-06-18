@@ -189,10 +189,10 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 
 // runTypecheck type-checks the project with `tsc --noEmit` using a temporary
 // tsconfig derived from the ts0 config. It is the single source of truth for
-// "does this project type-check"; build() and the watch hooks call it before
-// emitting anything, so it is the chokepoint that makes type-checking
-// unskippable.
-async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ success: boolean; output: string }> {
+// "does this project type-check"; build() (for build/run) and run() (for the
+// --no-build path) call it before emitting OR executing anything, so it is the
+// chokepoint that makes type-checking unskippable.
+export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ success: boolean; output: string }> {
 	const nestedProjects = findNestedProjectDirs(rootDir);
 	// A nested project (its own ts0.json) may use different settings -- e.g.
 	// JSX -- that would make the parent's type-check fail on it; it is
@@ -271,14 +271,6 @@ async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ succe
 	} finally {
 		unlinkSync(tempTsconfig);
 	}
-}
-
-// typecheck loads config (honouring CLI overrides) and type-checks the project.
-// Exposed for programmatic use; build() type-checks via runTypecheck directly.
-export async function typecheck(overrides?: BuildOverrides): Promise<{ success: boolean; output: string }> {
-	const { config: loaded, rootDir } = loadConfig();
-	const config = applyOverrides(loaded, overrides);
-	return runTypecheck(config, rootDir);
 }
 
 // typecheckPlugin runs the type-check at the start of every esbuild build,

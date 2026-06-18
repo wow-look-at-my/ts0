@@ -38,7 +38,7 @@ ts0 build     # produce a bundled output
 ### Flags
 
 - `--watch`, `-w` &mdash; watch mode (`build`, `test`)
-- `--no-build` &mdash; skip the build step (and the type-check) and run sources directly via `--experimental-strip-types` (`run`)
+- `--no-build` &mdash; skip the bundle step and run sources directly via `--experimental-strip-types`; still type-checked first (`run`)
 - `--entry <path>` &mdash; override the configured entry for this `build` invocation
 - `--outfile <path>` &mdash; override `outfile`; produces a single file at this path (`build`)
 - `--outdir <path>` &mdash; override `outdir` (`build`)
@@ -172,23 +172,27 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
 
 ## How it works
 
-- **Type-checking is mandatory.** `ts0` never emits output that hasn't passed
-    `tsc`. Both `ts0 build` and `ts0 run` type-check first &mdash; for `.ts` *and*
-    `.html` entries &mdash; and produce nothing if the check fails. In `--watch`
-    mode every rebuild re-checks, so introducing a type error leaves the previous
-    good output in place instead of overwriting it with something broken. The one
-    deliberate exception is `ts0 run --no-build`, which executes your TypeScript
-    directly via Node and writes no build artifact (a fast dev loop with no
-    type-check, like `tsx`/`ts-node`).
+- **Type-checking is mandatory &mdash; there is no way to build or run un-checked
+    code.** `ts0` type-checks before it emits *or executes* anything. `ts0 build`
+    and `ts0 run` both check first &mdash; for `.ts` *and* `.html` entries &mdash;
+    and produce/run nothing if the check fails. Even `ts0 run --no-build`, which
+    skips the bundle and writes no artifact, type-checks first: Node's
+    `--experimental-strip-types` only strips annotations (it does not type-check),
+    so ts0 runs `tsc` itself before handing the sources to Node. In `--watch` mode
+    every rebuild re-checks, so introducing a type error leaves the previous good
+    output in place instead of overwriting it with something broken.
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
     `ts0.json` (the DOM libs for browser/HTML entries, ESNext for Node), then
     bundles with esbuild. A pure-JS project with no TypeScript sources has nothing
     to check and builds straight through.
 - **Run:** `ts0 run` builds (type-check + bundle) then runs the output with Node.
-    With `--no-build` it skips the build and executes sources directly via
-    `node --experimental-strip-types` &mdash; no type-check, no artifact.
+    With `--no-build` it type-checks, then skips the bundle and executes the
+    sources directly via `node --experimental-strip-types` &mdash; the fast dev
+    loop, minus the artifact, but never minus the type-check.
 - **Test:** test files are discovered via the configured glob and handed to
-    `node --test --experimental-strip-types`.
+    `node --test --experimental-strip-types`. (Tests run your code rather than
+    producing a shipped artifact, so `ts0 test` does not impose the type-check
+    gate &mdash; run `ts0 build` for that.)
 
 ## License
 

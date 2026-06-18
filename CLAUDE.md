@@ -21,7 +21,7 @@ src/
         init.ts         # scaffolds ts0.json + src/ + package.json
         build.ts        # type-check gate (runTypecheck) + esbuild bundle (dispatches HTML)
         build-html.ts   # bundles an .html entry into a single inlined .html
-        run.ts          # build (or strip-types) + node
+        run.ts          # type-check, then build+node (or strip-types+node for --no-build)
         test.ts         # node --test on discovered test files
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
@@ -105,25 +105,32 @@ defaults plus auto-detected entry. Don't break the no-config-file path.
 
 ## Type-checking
 
-**Type-checking is an unskippable gate, and the gate lives in `build()`** &mdash;
-not in `cli.ts`. `build()` runs `runTypecheck()` before it emits anything and
-returns a failed `BuildResult` (no output written) if it fails. This is
-deliberate: every path that produces output goes through `build()`
-(`ts0 build`, `ts0 run`, and any programmatic caller), so none of them can emit
-an artifact that hasn't passed `tsc`. Do **not** move the type-check back up into
-the command layer &mdash; that reintroduces the hole where `ts0 run` bundled and
-executed un-type-checked code. The only execution path that doesn't type-check is
-`ts0 run --no-build`, which runs sources directly via
-`node --experimental-strip-types` and writes no build artifact (the intended
-fast-dev escape hatch).
+**Type-checking is an unskippable gate: no path builds OR runs code that hasn't
+passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the single
+chokepoint, called from two places:
+
+- `build()` runs it before it emits anything and returns a failed `BuildResult`
+    (no output written) on failure. Every path that produces output goes through
+    `build()` (`ts0 build`, `ts0 run` without `--no-build`, and any programmatic
+    caller), so none can emit an un-checked artifact. Do **not** move the check
+    back up into the command layer &mdash; that reintroduces the hole where
+    `ts0 run` bundled and executed un-type-checked code.
+- `run()` runs it for the `--no-build` path before handing sources to
+    `node --experimental-strip-types`. Strip-types only *erases* annotations, it
+    does **not** type-check, so without this gate `ts0 run --no-build` would
+    execute broken code. `--no-build` therefore skips only the bundle/artifact,
+    never the check.
+
+The one path that does not impose the gate is `ts0 test` (it runs your code
+rather than producing a shipped artifact, and you often want to run a test while
+the project has an unrelated type error). Use `ts0 build` to enforce types.
 
 `runTypecheck()` writes a temporary `.ts0-tsconfig.json` (gitignored), runs
 `tsc --noEmit` against it, and deletes it in a `finally`. The TypeScript binary
 is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
-project doesn't need its own `typescript` install. Preserve both behaviors. The
-exported `typecheck(overrides)` is a thin wrapper that loads config and calls
-`runTypecheck()`; `build()` calls `runTypecheck()` directly to avoid loading
-config twice.
+project doesn't need its own `typescript` install. Preserve both behaviors. Both
+`build()` and `run()` already hold a loaded config, so they call
+`runTypecheck(config, rootDir)` directly rather than re-loading.
 
 Key details of the generated tsconfig:
 
