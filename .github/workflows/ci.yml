@@ -120,7 +120,6 @@ jobs:
       - name: Test js sample
         working-directory: samples/js
         run: |
-          rm -rf dist
           ts0 build
           # Directory entry -> "js" library target: every src/**/*.ts is
           # compiled to a parallel dist/**/*.js, structure preserved.
@@ -141,8 +140,8 @@ jobs:
           ls dist/chunk-*.js >/dev/null
           grep -q 'chunk-' dist/math/shape.js
           ! grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
-          # Loader escape hatch: a non-shared .frag import is inlined as text
-          # (proves esbuild's text loader ran; a JS-module import would error).
+          # loaders config: a non-shared .frag import is inlined as text
+          # (proves the text loader ran; a JS-module import would error).
           grep -q 'FRAG_MARKER' dist/gfx/shader.js
 
       - name: Upload html sample build
