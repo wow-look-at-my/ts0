@@ -16,6 +16,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Unit tests (runtime fetch interceptor)
+        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
 
