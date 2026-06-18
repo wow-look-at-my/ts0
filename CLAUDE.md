@@ -19,12 +19,12 @@ src/
     config.ts           # ts0.json loader, defaults, entry auto-detection
     commands/
         init.ts         # scaffolds ts0.json + src/ + package.json
-        build.ts        # tsc --noEmit, then esbuild bundle (dispatches HTML/js)
+        build.ts        # type-check gate (runTypecheck) + esbuild bundle (dispatches HTML/js)
         build-html.ts   # bundles an .html entry into a single inlined .html
-        build-js.ts     # compiles a directory entry into a parallel .js tree
+        build-js.ts     # compiles a directory entry into a parallel .js tree (type-checked)
         esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
-        run.ts          # build (or strip-types) + node
-        test.ts         # node --test on discovered test files
+        run.ts          # type-check, then build+node (or strip-types+node for --no-build)
+        test.ts         # type-check, then node --test on discovered test files
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
@@ -70,13 +70,20 @@ CLI end-to-end by:
     to the automatic Preact runtime (`preact/jsx-runtime`) with no
     `React.createElement`/`React.Fragment` &mdash; the regression guard for the
     "React is not defined" bug where JSX config wasn't threaded into the HTML
-    build path.
+    build path. (Both HTML samples also now exercise the type-check on the HTML
+    path, since HTML entries are type-checked rather than skipped.)
 7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
     the js library target compiled every `src/**/*.ts` to a parallel
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
     chunk (the shared body appears in exactly one output file, not copied into
     each importer), inlined a non-shared `.frag` text-loader import, and emitted
     no sourcemaps.
+8. The "Type-check gate blocks broken output" step: a project with a deliberate
+    type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
+    `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
+    nothing (no `dist/`, no test run). The error strips to valid JS and the test
+    file registers no tests, so a `--no-build` or `test` run would exit 0 if the
+    check were ever skipped &mdash; this step catches exactly that regression.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -111,15 +118,72 @@ defaults plus auto-detected entry. Don't break the no-config-file path.
 
 ## Type-checking
 
-`commands/build.ts` writes a temporary `.ts0-tsconfig.json` (gitignored), runs
+**Type-checking is an unskippable gate: there is NO way to build or run code
+that hasn't passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the
+single chokepoint, called from every command that emits or executes code:
+
+- `build()` runs it before it emits anything and returns a failed `BuildResult`
+    (no output written) on failure. Every path that produces output goes through
+    `build()` (`ts0 build`, `ts0 run` without `--no-build`, and any programmatic
+    caller), so none can emit an un-checked artifact. Do **not** move the check
+    back up into the command layer &mdash; that reintroduces the hole where
+    `ts0 run` bundled and executed un-type-checked code.
+- `run()` runs it for the `--no-build` path before handing sources to
+    `node --experimental-strip-types`. Strip-types only *erases* annotations, it
+    does **not** type-check, so without this gate `ts0 run --no-build` would
+    execute broken code. `--no-build` therefore skips only the bundle/artifact,
+    never the check.
+- `test()` runs it before spawning `node --test`. The test runner uses
+    `--experimental-strip-types` too, so an un-checked test run would execute an
+    invalid program. A type error anywhere in the project fails `ts0 test` and no
+    test process is spawned.
+
+There is intentionally **no escape hatch** &mdash; every command that runs or
+emits code type-checks first. If you add a new command (or a new branch in an
+existing one) that runs/emits code, it MUST call `runTypecheck()` first and bail
+on failure. The only thing `--no-build` and the like may skip is the
+bundle/artifact, never the check.
+
+`runTypecheck()` writes a temporary `.ts0-tsconfig.json` (gitignored), runs
 `tsc --noEmit` against it, and deletes it in a `finally`. The TypeScript binary
 is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
 project doesn't need its own `typescript` install. Preserve both behaviors.
+`build()`, `run()`, and `test()` each already hold a loaded config, so they call
+`runTypecheck(config, rootDir)` directly rather than re-loading.
 
-The generated tsconfig excludes nested ts0 projects (any subdirectory with its
-own `ts0.json`, via `findNestedProjectDirs`). Without this, building ts0 itself
-would type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
-with `TS17004`. A nested project is type-checked on its own when built directly.
+Key details of the generated tsconfig:
+
+- **`lib` depends on target.** Browser code (an explicit `"browser"` target, or
+    *any* HTML entry &mdash; always browser) gets `["ESNext", "DOM", "DOM.Iterable"]`
+    so `document`/`fetch`/`addEventListener` resolve. Node code gets `["ESNext"]`
+    only; its globals come from `@types/node`. Without the DOM lib, every
+    HTML/browser project would fail with "Cannot find name 'document'".
+- **HTML entries ARE type-checked.** (They used to be skipped.) An HTML project's
+    `.ts`/`.tsx` files are checked before bundling, so a type error in HTML
+    scripts fails the build like any other project.
+- **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
+    the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
+    entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`
+    "No inputs were found" and would wrongly block a perfectly valid JS-only build.
+- **Nested ts0 projects are excluded** (any subdirectory with its own `ts0.json`,
+    via `findNestedProjectDirs`). Without this, building ts0 itself would
+    type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
+    with `TS17004`. A nested project is type-checked on its own when built directly.
+
+**Watch mode re-checks on every cycle** for all three commands &mdash; a one-shot
+up-front check would let later rebuilds/re-runs slip past:
+
+- `ts0 build --watch` (JS) adds `typecheckPlugin`, an esbuild `onStart` hook that
+    runs `runTypecheck()` and returns errors on failure, so esbuild skips writing
+    output for a rebuild that doesn't type-check. The HTML path threads a
+    `typecheck` callback into `buildHtml`, which `buildOnce` runs before each
+    rebuild and bails (writing nothing) on failure. Either way the previous good
+    output stays in place rather than being overwritten with something broken.
+- `ts0 test --watch` does **not** use `node --test --watch` (it re-runs tests on
+    change without re-type-checking, which would run an invalid program). Instead
+    `test()` owns the loop: an `fsWatch` debounces changes into a `cycle()` that
+    type-checks, then runs the tests one-shot only if the check passes. Do not
+    switch it back to `node --test --watch`.
 
 Module resolution in the generated tsconfig depends on the target: the default
 single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while

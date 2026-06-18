@@ -2,7 +2,7 @@ import * as esbuild from "esbuild";
 import { join, resolve, extname } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import type { Ts0Config } from "../config.ts";
-import type { BuildResult } from "./build.ts";
+import { typecheckPlugin, type BuildResult } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 
 // isJsTarget reports whether the configured entry selects the "js" library
@@ -102,6 +102,12 @@ export async function buildJs(
 
 	try {
 		if (options?.watch) {
+			// Type-check on every build, initial and rebuild (see typecheckPlugin):
+			// build() skips its one-shot gate in watch mode, so the plugin is what
+			// covers the watch path. esbuild writes no output for a build whose
+			// onStart reports errors, so a rebuild that doesn't type-check can't
+			// emit a broken .js tree -- the previous good output stays in place.
+			esbuildConfig.plugins = [typecheckPlugin(config, rootDir), ...(esbuildConfig.plugins ?? [])];
 			const ctx = await esbuild.context(esbuildConfig);
 			await ctx.watch();
 			console.log("Watching for changes...");
