@@ -92,7 +92,8 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `assetDirs` | `string[]`            | &mdash;            | HTML entries: directories to scan for embeddable assets (relative to config file). When set, only these dirs are scanned instead of the entry's directory. |
 | `jsx`       | `"automatic" \| "transform" \| "preserve"` | &mdash; | Enable JSX/TSX. `"automatic"` uses the modern runtime (no factory import; pair with `jsxImportSource`); `"transform"` is the classic `React.createElement`; `"preserve"` leaves JSX as-is. |
 | `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
-| `esbuild`   | `object`              | &mdash;            | Escape hatch &mdash; merged into the esbuild options last     |
+| `loaders`   | `object`              | &mdash;            | Map file extensions to loader names (`text`, `dataurl`, `base64`, `binary`, `file`, `json`, …), e.g. `{ ".wgsl": "text" }`. The friendly way to import non-JS/TS files; applies to the default and js targets. |
+| `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
 When `outfile` is set, `ts0` produces a single executable file with a Node shebang &mdash;
 useful for shipping a CLI as one file. When only `outdir` is set, output goes there
@@ -163,9 +164,8 @@ individual module by URL.
 {
     "entry": "src",
     "target": "browser",
-    "format": "esm",
     "sourcemap": false,
-    "esbuild": { "loader": { ".wgsl": "text" } }
+    "loaders": { ".wgsl": "text" }
 }
 ```
 
@@ -173,7 +173,7 @@ individual module by URL.
     **deduplicated into a chunk** (for `esm` output) and imported — never copied
     into each output. A consumer still writes a single import; the browser
     fetches any shared chunk transitively. Loader-backed imports (e.g. `import
-    src from "./shader.wgsl"` with the `loader` escape hatch above) and
+    src from "./shader.wgsl"`, enabled by the `loaders` field above) and
     non-shared local imports stay inlined in the importing module. Pass
     `"esbuild": { "splitting": false }` to force fully self-contained outputs
     (with duplication) instead.
