@@ -1,0 +1,6 @@
+{
+	"entry": "src",
+	"target": "browser",
+	"sourcemap": false,
+	"loaders": { ".frag": "text" }
+}

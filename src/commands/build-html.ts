@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, watch as fsWatch } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, realpathSync, watch as fsWatch } from "node:fs";
 import { dirname, resolve, basename, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Ts0Config } from "../config.ts";
@@ -33,7 +33,7 @@ const CSS_ASSET_LOADERS: Record<string, esbuild.Loader> = {
 // (ts0.json, package.json) and embedding those is never desired. Users
 // fetching runtime JSON should either rename the extension or use
 // esbuild's import-assertion JSON loader from JS code.
-const TEXT_ASSET_EXTS = new Set([".glsl", ".wgsl", ".vert", ".frag", ".txt"]);
+const TEXT_ASSET_EXTS = new Set([".glsl", ".wgsl", ".vert", ".frag", ".txt", ".xml"]);
 const BINARY_ASSET_EXTS = new Set([".hdr", ".glb", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bin"]);
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -72,7 +72,7 @@ export function isHtmlEntry(entry: string | undefined): boolean {
 export async function buildHtml(
 	config: Ts0Config,
 	rootDir: string,
-	options?: { watch?: boolean },
+	options?: { watch?: boolean; typecheck?: () => Promise<{ success: boolean; output: string }> },
 ): Promise<BuildResult> {
 	const startTime = performance.now();
 
@@ -93,8 +93,19 @@ export async function buildHtml(
 		: resolve(rootDir, config.outdir || "dist", basename(config.entry));
 
 	const buildOnce = async (): Promise<{ errors: string[] }> => {
+		// In watch mode build() can't gate up front (later rebuilds would slip
+		// past), so it hands us the type-check to run before each rebuild. If it
+		// fails we report the errors and write nothing -- the previous good
+		// output stays in place. Non-watch builds are already gated by build()
+		// and pass no typecheck here.
+		if (options?.typecheck) {
+			const check = await options.typecheck();
+			if (!check.success) {
+				return { errors: [`Type-checking failed:\n${check.output}`] };
+			}
+		}
 		const html = readFileSync(htmlPath, "utf-8");
-		const result = await processHtml(html, htmlSourceDir, config);
+		const result = await processHtml(html, htmlSourceDir, rootDir, config);
 		mkdirSync(dirname(outFile), { recursive: true });
 		writeFileSync(outFile, result.html);
 		return { errors: result.errors };
@@ -174,6 +185,7 @@ interface ProcessResult {
 async function processHtml(
 	html: string,
 	sourceDir: string,
+	rootDir: string,
 	config: Ts0Config,
 ): Promise<ProcessResult> {
 	const errors: string[] = [];
@@ -200,6 +212,13 @@ async function processHtml(
 			target: "esnext",
 			write: false,
 			logLevel: "silent",
+			// JSX support (esbuild). Without this an .tsx/.jsx script entry
+			// falls back to esbuild's default classic transform
+			// (React.createElement), which breaks Preact/automatic-runtime
+			// projects with "React is not defined". Threaded before the
+			// escape hatch so an explicit esbuild.jsx can still override it.
+			...(config.jsx && { jsx: config.jsx }),
+			...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
 		};
 
 		let entryDescription: string;
@@ -295,7 +314,9 @@ async function processHtml(
 	// if no embeddable assets exist next to the entry — keeps trivial HTML
 	// samples (no shaders, no HDR) byte-identical to pre-feature output.
 	if (config.embedAssets !== false) {
-		const assets = collectAssets(sourceDir);
+		const assets = config.assetDirs
+			? collectAssetsFromDirs(rootDir, config.assetDirs)
+			: collectAssets(sourceDir);
 		if (Object.keys(assets.text).length || Object.keys(assets.binary).length) {
 			result = injectFetchInterceptor(result, assets);
 		}
@@ -334,6 +355,46 @@ function collectAssets(sourceDir: string): AssetMap {
 	};
 
 	walk(sourceDir);
+	return { text, binary };
+}
+
+function collectAssetsFromDirs(rootDir: string, assetDirs: string[]): AssetMap {
+	const text: Record<string, string> = {};
+	const binary: Record<string, string> = {};
+	const realRoot = realpathSync(rootDir);
+
+	const walk = (dir: string, baseDir: string): void => {
+		for (const name of readdirSync(dir)) {
+			if (name.startsWith(".") || name === "node_modules" || name === "dist") continue;
+			const p = join(dir, name);
+			const st = statSync(p);
+			if (st.isDirectory()) {
+				walk(p, baseDir);
+				continue;
+			}
+			const ext = extname(name).toLowerCase();
+			const rel = relative(baseDir, p).split(/[\\/]/).join("/");
+			if (TEXT_ASSET_EXTS.has(ext)) {
+				text[rel] = readFileSync(p, "utf-8");
+			} else if (BINARY_ASSET_EXTS.has(ext)) {
+				const mime = MIME_BY_EXT[ext] ?? "application/octet-stream";
+				binary[rel] = `data:${mime};base64,${readFileSync(p).toString("base64")}`;
+			}
+		}
+	};
+
+	for (const dir of assetDirs) {
+		const resolved = resolve(rootDir, dir);
+		const real = realpathSync(resolved);
+		if (!real.startsWith(realRoot + "/") && real !== realRoot) {
+			throw new Error(`ts0: assetDirs entry "${dir}" resolves outside the project root`);
+		}
+		if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+			throw new Error(`ts0: assetDirs entry "${dir}" is not a directory`);
+		}
+		walk(resolved, rootDir);
+	}
+
 	return { text, binary };
 }
 

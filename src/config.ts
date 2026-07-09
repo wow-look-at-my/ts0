@@ -36,7 +36,35 @@ export interface Ts0Config {
 	// where the asset tree is reachable).
 	embedAssets?: boolean;
 
-	// Additional esbuild options (escape hatch)
+	// HTML entries only: directories to scan for embeddable assets, relative
+	// to the config file (rootDir). When set, ONLY these directories are
+	// scanned (instead of the HTML entry's directory). Asset keys in the
+	// fetch interceptor are relative to rootDir, so fetch("people/foo.xml")
+	// matches assetDirs: ["people"].
+	assetDirs?: string[];
+
+	// JSX support. Set `jsx` to enable JSX/TSX in both the type-checker and the
+	// bundler. Values follow esbuild's naming: "automatic" (modern runtime, no
+	// factory import needed; pair with `jsxImportSource`), "transform" (classic
+	// React.createElement), or "preserve". When set, `.tsx` files are included
+	// in the type-check and esbuild is configured to match, so a Preact/React
+	// project needs no esbuild escape hatch. `jsxImportSource` sets the module
+	// the automatic runtime imports from (e.g. "preact", "react").
+	jsx?: "automatic" | "transform" | "preserve";
+	jsxImportSource?: string;
+
+	// Map file extensions to how their imports are loaded, e.g.
+	// { ".wgsl": "text" } to import shader files as strings, or
+	// { ".png": "dataurl" } to inline images. Values are loader names
+	// (text, dataurl, base64, binary, file, json, …). This is the friendly way
+	// to handle non-JS/TS imports without reaching for the `esbuild` escape
+	// hatch; it applies to the default single-entry target and the js library
+	// target. (Add an ambient `declare module "*.wgsl"` so the import also
+	// type-checks.)
+	loaders?: Record<string, string>;
+
+	// Additional esbuild options (raw escape hatch). Merged last, so an
+	// esbuild.loader here overrides `loaders` above.
 	esbuild?: Record<string, unknown>;
 }
 
@@ -86,6 +114,25 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 			...userConfig.test,
 		},
 	};
+
+	if (config.assetDirs !== undefined) {
+		if (!Array.isArray(config.assetDirs) || !config.assetDirs.every((d: unknown) => typeof d === "string" && d.length > 0)) {
+			throw new Error("ts0: assetDirs must be an array of non-empty strings");
+		}
+	}
+
+	if (config.loaders !== undefined) {
+		const ok =
+			typeof config.loaders === "object" &&
+			config.loaders !== null &&
+			!Array.isArray(config.loaders) &&
+			Object.entries(config.loaders).every(
+				([ext, loader]) => typeof ext === "string" && ext.length > 0 && typeof loader === "string" && loader.length > 0,
+			);
+		if (!ok) {
+			throw new Error("ts0: loaders must be an object mapping file extensions to loader names");
+		}
+	}
 
 	// Auto-detect entry if not specified
 	if (!config.entry) {

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { join, basename } from "node:path";
 import { loadConfig } from "../config.ts";
-import { build } from "./build.ts";
+import { build, runTypecheck } from "./build.ts";
 import { isHtmlEntry } from "./build-html.ts";
+import { isJsTarget } from "./build-js.ts";
 
 export interface RunOptions {
 	// Skip build step (use for development with --experimental-strip-types)
@@ -21,6 +22,25 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		process.exit(1);
 	}
 
+	if (isJsTarget(options.file ?? config.entry, rootDir)) {
+		console.error("ts0 run does not support the js (library) target. Use 'ts0 build' to compile the module tree.");
+		process.exit(1);
+	}
+
+	// --no-build skips the bundle, NOT the type-check. There must be no path
+	// that runs code which hasn't passed tsc: `node --experimental-strip-types`
+	// only strips type annotations, it does not type-check, so without this gate
+	// `ts0 run --no-build` would happily execute broken code. The build path
+	// (below) type-checks inside build(); this covers the one path that doesn't.
+	if (options.noBuild) {
+		const check = await runTypecheck(config, rootDir);
+		if (!check.success) {
+			console.error("Type-checking failed:");
+			console.error(check.output);
+			process.exit(1);
+		}
+	}
+
 	if (options.file) {
 		// Run specific file
 		const fileToRun = join(rootDir, options.file);
@@ -31,7 +51,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const result = await build();
 			if (!result.success) {
 				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(`	${e}`));
+				result.errors.forEach((e) => console.error(e));
 				process.exit(1);
 			}
 			// For specific files with outfile config, still need outdir
@@ -53,7 +73,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const result = await build();
 			if (!result.success) {
 				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(`	${e}`));
+				result.errors.forEach((e) => console.error(e));
 				process.exit(1);
 			}
 			// Use outfile if specified, otherwise derive from outdir

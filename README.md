@@ -32,13 +32,13 @@ ts0 build     # produce a bundled output
 | ---------------- | ------------------------------------------------------ |
 | `ts0 init`       | Create `ts0.json` and starter files in the cwd         |
 | `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild|
-| `ts0 run [file]` | Build, then run the entry point (or a specific file)   |
+| `ts0 run [file]` | Type-check, build, then run the entry point (or a specific file) |
 | `ts0 test [pat]` | Run tests via Node's built-in test runner              |
 
 ### Flags
 
 - `--watch`, `-w` &mdash; watch mode (`build`, `test`)
-- `--no-build` &mdash; skip the build step and run sources directly via `--experimental-strip-types` (`run`)
+- `--no-build` &mdash; skip the bundle step and run sources directly via `--experimental-strip-types`; still type-checked first (`run`)
 - `--entry <path>` &mdash; override the configured entry for this `build` invocation
 - `--outfile <path>` &mdash; override `outfile`; produces a single file at this path (`build`)
 - `--outdir <path>` &mdash; override `outdir` (`build`)
@@ -79,7 +79,7 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 
 | Field       | Type                  | Default            | Notes                                                         |
 | ----------- | --------------------- | ------------------ | ------------------------------------------------------------- |
-| `entry`     | `string`              | auto-detected      | Entry point relative to the config file. May be `.ts` or `.html` |
+| `entry`     | `string`              | auto-detected      | Entry point relative to the config file. A `.ts` file (single bundle), a `.html` file (inlined HTML), or a **directory** (the [js library target](#js-library-target)) |
 | `outfile`   | `string`              | &mdash;            | Single-file output. Adds a `#!/usr/bin/env node` shebang for JS |
 | `outdir`    | `string`              | `"dist"`           | Used when `outfile` is not set                                |
 | `target`    | `"node" \| "browser"` | `"node"`           | esbuild platform (ignored for HTML entries &mdash; always browser) |
@@ -89,7 +89,11 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `sourcemap` | `boolean`             | `true`             | Emit a sourcemap (inlined for HTML entries)                   |
 | `test.pattern` | `string`           | `"**/*.test.ts"`   | Glob for test files                                           |
 | `embedAssets` | `boolean`           | `true`             | HTML entries: embed runtime-fetched assets (see below). Set `false` to skip. |
-| `esbuild`   | `object`              | &mdash;            | Escape hatch &mdash; merged into the esbuild options last     |
+| `assetDirs` | `string[]`            | &mdash;            | HTML entries: directories to scan for embeddable assets (relative to config file). When set, only these dirs are scanned instead of the entry's directory. |
+| `jsx`       | `"automatic" \| "transform" \| "preserve"` | &mdash; | Enable JSX/TSX. `"automatic"` uses the modern runtime (no factory import; pair with `jsxImportSource`); `"transform"` is the classic `React.createElement`; `"preserve"` leaves JSX as-is. |
+| `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
+| `loaders`   | `object`              | &mdash;            | Map file extensions to loader names (`text`, `dataurl`, `base64`, `binary`, `file`, `json`, …), e.g. `{ ".wgsl": "text" }`. The friendly way to import non-JS/TS files; applies to the default and js targets. |
+| `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
 When `outfile` is set, `ts0` produces a single executable file with a Node shebang &mdash;
 useful for shipping a CLI as one file. When only `outdir` is set, output goes there
@@ -115,6 +119,10 @@ that runs from disk (`file://`) with no asset tree alongside it. Specifically:
     keeps resolving in the standalone bundle. Set `"embedAssets": false` to disable.
 - External URLs (`https://`, `//`, `data:`) are left untouched.
 
+The project's `.ts`/`.tsx` files are type-checked (with the DOM lib) before any
+HTML is written, so a type error in an HTML project's scripts fails the build just
+like it would for a Node entry.
+
 ```html
 <!-- index.html -->
 <link rel="stylesheet" href="./src/styles.css" />
@@ -134,19 +142,99 @@ ts0 build --entry pages/foo/index.html \
 `ts0 run` is for Node entries only; it errors out when the entry is HTML. Open the
 produced HTML in a browser instead.
 
-The text/binary asset extension lists are fixed (`.glsl`, `.wgsl`, `.vert`, `.frag`,
-`.txt` for text; `.hdr`, `.glb`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bin` for
-binary). `.json` is intentionally excluded so `ts0.json`/`package.json` aren't picked
-up; runtime JSON should be loaded via JS imports instead.
+The text/binary asset extension lists are defined by `TEXT_ASSET_EXTS` and
+`BINARY_ASSET_EXTS` at the top of `src/commands/build-html.ts`. `.json` is intentionally
+excluded so `ts0.json`/`package.json` aren't picked up; runtime JSON should be loaded
+via JS imports instead.
+
+The fetch interceptor exposes `window.__ts0_embedded_paths__` &mdash; an array of all
+embedded asset keys. Client code can use this to enumerate available assets at runtime
+(e.g. to discover all `.xml` files in a data directory without a hardcoded manifest).
+
+### js (library) target
+
+If `entry` is a **directory**, `ts0 build` switches to the "js" library target:
+every `*.ts`/`*.tsx` file under that directory is compiled to a parallel `*.js`
+file under `outdir`, preserving the directory structure
+(`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). This is the shape a library
+deployed to static hosting (GitHub Pages, a CDN) wants — consumers import an
+individual module by URL.
+
+```json
+{
+    "entry": "src",
+    "target": "browser",
+    "sourcemap": false,
+    "loaders": { ".wgsl": "text" }
+}
+```
+
+- Each file is its own esbuild entry point. Code shared across entries is
+    **deduplicated into a chunk** (for `esm` output) and imported — never copied
+    into each output. A consumer still writes a single import; the browser
+    fetches any shared chunk transitively. Loader-backed imports (e.g. `import
+    src from "./shader.wgsl"`, enabled by the `loaders` field above) and
+    non-shared local imports stay inlined in the importing module. Pass
+    `"esbuild": { "splitting": false }` to force fully self-contained outputs
+    (with duplication) instead.
+- Declaration files (`*.d.ts`) and tests (`*.test.*`, `*.spec.*`) are skipped.
+- Type-checking uses **bundler** module resolution (matching esbuild), so
+    extensionless relative imports and loader-backed imports type-check without
+    forcing `.ts` extensions on library source. Add an ambient declaration
+    (e.g. `declare module "*.wgsl" { const s: string; export default s; }`) so
+    loader imports type-check.
+- `ts0 run` does not apply to this target (there is no single entry to run);
+    use `ts0 build`. The single-file `outfile` option is likewise ignored —
+    output always goes to `outdir`.
+
+See `samples/js` for a complete example.
+
+### JSX / TSX
+
+Set `jsx` to compile `.tsx`/`.jsx`. The setting is threaded into both the type-checker
+and esbuild &mdash; for **every** entry kind, including HTML entries whose `<script>`
+tags pull in `.tsx`. A Preact app uses the automatic runtime:
+
+```json
+{
+    "entry": "index.html",
+    "jsx": "automatic",
+    "jsxImportSource": "preact"
+}
+```
+
+With `"automatic"`, JSX compiles to `preact/jsx-runtime` calls and needs no factory
+import. Omitting `jsxImportSource` (or using `"transform"`) makes esbuild emit the
+classic `React.createElement`, which throws `React is not defined` in a Preact bundle
+&mdash; so always pair `"automatic"` with `jsxImportSource` for Preact/React. See
+`samples/html-jsx` for a complete Preact-via-HTML example.
 
 ## How it works
 
+- **Type-checking is mandatory &mdash; there is no way to build, run, or test
+    un-checked code.** `ts0` type-checks before it emits *or executes* anything.
+    `build`, `run`, and `test` all check first &mdash; for every entry kind
+    (`.ts`, `.html`, and the directory/js library target) &mdash; and produce/run
+    nothing if the check fails. Even
+    `ts0 run --no-build`, which skips the bundle and writes no artifact,
+    type-checks first: Node's `--experimental-strip-types` only strips annotations
+    (it does not type-check), so ts0 runs `tsc` itself before handing sources to
+    Node. There is no escape hatch. In every `--watch` mode (`build` *and* `test`)
+    each cycle re-checks, so introducing a type error stops the run/rebuild and
+    leaves the previous good output in place instead of running something broken.
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
-    `ts0.json`, then bundles with esbuild.
-- **Run:** with `--no-build`, `ts0 run` shells out to `node --experimental-strip-types`
-    to execute TypeScript directly &mdash; no build step in the dev loop.
-- **Test:** test files are discovered via the configured glob and handed to
-    `node --test --experimental-strip-types`.
+    `ts0.json` (the DOM libs for browser/HTML entries, ESNext for Node), then
+    bundles with esbuild. A pure-JS project with no TypeScript sources has nothing
+    to check and builds straight through.
+- **Run:** `ts0 run` builds (type-check + bundle) then runs the output with Node.
+    With `--no-build` it type-checks, then skips the bundle and executes the
+    sources directly via `node --experimental-strip-types` &mdash; the fast dev
+    loop, minus the artifact, but never minus the type-check.
+- **Test:** `ts0 test` type-checks the whole project, then (only if it passes)
+    runs the discovered test files via `node --test --experimental-strip-types`. A
+    type error anywhere fails the command and no tests run. `ts0 test --watch`
+    re-type-checks and re-runs on every change (ts0 drives the watch loop itself
+    rather than `node --test --watch`, so the check is never skipped).
 
 ## License
 
