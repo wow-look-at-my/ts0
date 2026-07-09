@@ -16,6 +16,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Unit tests (runtime fetch interceptor)
+        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
 
@@ -66,6 +69,28 @@ jobs:
         working-directory: /tmp/test-project
         run: ts0 test
 
+      - name: Type-check gate blocks broken output
+        run: |
+          # A type error must make EVERY code path -- build, run, run --no-build,
+          # and test -- fail and emit/execute nothing. This is the regression
+          # guard for "there must be no way to run an invalid program". The error
+          # (string assigned to number) strips to valid JS and the test file
+          # registers no tests, so a --no-build run or a test run would exit 0 if
+          # the type-check were ever skipped: this catches exactly that hole.
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
+          mkdir -p "$dir/src"
+          printf 'const n: number = "nope";\nexport {};\n' > "$dir/src/main.ts"
+          printf 'export {};\n' > "$dir/src/noop.test.ts"
+          cd "$dir"
+          if ts0 build; then echo "FAIL: ts0 build succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite a type error"; exit 1; fi
+          if ts0 run; then echo "FAIL: ts0 run succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 run wrote dist/ despite a type error"; exit 1; fi
+          if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite a type error"; exit 1; fi
+          if ts0 test; then echo "FAIL: ts0 test ran tests despite a type error"; exit 1; fi
+          echo "Type-check gate OK: build, run, run --no-build, and test all refused broken code"
+
       - name: Test basic sample
         working-directory: samples/basic
         run: |
@@ -101,9 +126,59 @@ jobs:
           ts0 build --entry index.html --outfile out/cli-flag.html
           test -f out/cli-flag.html
 
+      - name: Test html-jsx sample
+        working-directory: samples/html-jsx
+        run: |
+          ts0 build
+          test -f dist/index.html
+          # JSX through an HTML entry must use the automatic Preact runtime,
+          # NOT esbuild's default classic transform. A Preact bundle that
+          # emits React.createElement throws "React is not defined" at
+          # runtime, so assert the classic factory is entirely absent and the
+          # preact/jsx-runtime module is bundled in.
+          ! grep -q 'React.createElement' dist/index.html
+          ! grep -q 'React.Fragment' dist/index.html
+          grep -q 'preact/jsx-runtime' dist/index.html
+          # The rendered component's text must survive bundling.
+          grep -q 'ts0 + Preact' dist/index.html
+
+      - name: Test js sample
+        working-directory: samples/js
+        run: |
+          ts0 build
+          # Directory entry -> "js" library target: every src/**/*.ts is
+          # compiled to a parallel dist/**/*.js, structure preserved.
+          test -f dist/math/vec.js
+          test -f dist/math/shape.js
+          test -f dist/gfx/shader.js
+          # Declaration files are not compiled to outputs.
+          ! test -e dist/shaders.js
+          # sourcemap:false in ts0.json -> no .map files.
+          ! test -e dist/math/vec.js.map
+          # ESM output.
+          grep -q 'export' dist/math/vec.js
+          # No duplication: add() is shared (vec.ts is an entry AND shape.ts
+          # imports it), so it must be emitted once into a chunk and imported,
+          # never inlined into each output. Assert the body lives in exactly one
+          # file, a chunk exists, and shape.js imports it rather than inlining.
+          test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
+          ls dist/chunk-*.js >/dev/null
+          grep -q 'chunk-' dist/math/shape.js
+          ! grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
+          # loaders config: a non-shared .frag import is inlined as text
+          # (proves the text loader ran; a JS-module import would error).
+          grep -q 'FRAG_MARKER' dist/gfx/shader.js
+
       - name: Upload html sample build
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: html-sample
           path: samples/html/dist/index.html
+
+      - name: Upload html-jsx sample build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-jsx-sample
+          path: samples/html-jsx/dist/index.html

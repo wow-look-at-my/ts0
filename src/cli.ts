@@ -1,4 +1,4 @@
-import { build, typecheck } from "./commands/build.ts";
+import { build } from "./commands/build.ts";
 import { run } from "./commands/run.ts";
 import { test } from "./commands/test.ts";
 import { init } from "./commands/init.ts";
@@ -37,6 +37,9 @@ Entry points:
 	*.ts					# Bundled to a single JS file (or directory)
 	*.html					# All <script src> and <link rel=stylesheet>
 								referenced locally are inlined into the output HTML
+	<dir>/					# "js" library target: every *.ts under the
+								directory is compiled to a parallel *.js tree,
+								structure preserved (e.g. src/a/b.ts -> dist/a/b.js)
 `;
 
 async function main() {
@@ -89,14 +92,8 @@ async function main() {
 				outdir: getOption("outdir"),
 			};
 
-			console.log("Type-checking...");
-			const checkResult = await typecheck(overrides);
-			if (!checkResult.success) {
-				console.error(checkResult.output);
-				process.exit(1);
-			}
-
-			console.log("Building...");
+			// build() type-checks before emitting anything (see commands/build.ts);
+			// a type error comes back as a failed result here, never as output.
 			const result = await build({ watch: hasFlag("watch", "w"), overrides });
 
 			if (!hasFlag("watch", "w")) {
@@ -104,7 +101,7 @@ async function main() {
 					console.log(`Built in ${result.duration.toFixed(0)}ms`);
 				} else {
 					console.error("Build failed:");
-					result.errors.forEach((e) => console.error(`	${e}`));
+					result.errors.forEach((e) => console.error(e));
 					process.exit(1);
 				}
 			}
