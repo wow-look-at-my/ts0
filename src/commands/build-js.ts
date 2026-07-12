@@ -2,7 +2,7 @@ import * as esbuild from "esbuild";
 import { join, resolve, extname } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import type { Ts0Config } from "../config.ts";
-import { typecheckPlugin, type BuildResult } from "./build.ts";
+import { emitDeclarations, typecheckPlugin, type BuildResult } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 
 // isJsTarget reports whether the configured entry selects the "js" library
@@ -46,6 +46,34 @@ function collectEntryPoints(srcDir: string, outDirAbs: string): string[] {
 	return found;
 }
 
+// declarationsPlugin emits the parallel *.d.ts tree (tsc, declaration-only;
+// see emitDeclarations in build.ts) after each successful esbuild build --
+// the one-shot build AND every watch rebuild, so the .js and .d.ts trees never
+// drift apart in either mode. It runs in onEnd, after esbuild wrote the .js
+// outputs, and reports an emit failure as a build error: the one-shot build
+// comes back failed (ts0 build exits non-zero) and a watch rebuild logs it.
+// A build that already failed (type-check gate, bundle error) skips the pass,
+// and noEmitOnError inside the pass means a failure writes no .d.ts at all.
+function declarationsPlugin(
+	config: Ts0Config,
+	rootDir: string,
+	opts: { entryPoints: string[]; srcDir: string; outDir: string },
+): esbuild.Plugin {
+	return {
+		name: "ts0-declarations",
+		setup(pluginBuild) {
+			pluginBuild.onEnd(async (result) => {
+				if (result.errors.length > 0) return null;
+				const emit = await emitDeclarations(config, rootDir, opts);
+				if (!emit.success) {
+					return { errors: [{ text: `Declaration emit failed:\n${emit.output}` }] };
+				}
+				return null;
+			});
+		},
+	};
+}
+
 // buildJs compiles a directory of TypeScript modules into a parallel tree of
 // ESM JavaScript under outdir. Each source file is its own esbuild entry point,
 // so a consumer can import any single output module by URL. Code splitting is
@@ -55,6 +83,10 @@ function collectEntryPoints(srcDir: string, outDirAbs: string): string[] {
 // transitively. Loader-backed imports (e.g. .wgsl text) and non-shared local
 // imports stay inlined in the importing module. This is the shape a library
 // deployed to static hosting (GitHub Pages, a CDN) wants.
+//
+// Unless config.declarations is false, a parallel *.d.ts tree is emitted next
+// to the *.js outputs (declarationsPlugin above), so a deployed library ships
+// type declarations at the same URLs as its code.
 export async function buildJs(
 	config: Ts0Config,
 	rootDir: string,
@@ -99,6 +131,16 @@ export async function buildJs(
 		// splitting: false to force self-contained outputs).
 		...config.esbuild,
 	};
+
+	// Declaration emit is on by default for this target (a library's whole
+	// point is consumption); "declarations": false opts out. Prepended so it
+	// runs before any user-supplied plugin from the escape hatch.
+	if (config.declarations !== false) {
+		esbuildConfig.plugins = [
+			declarationsPlugin(config, rootDir, { entryPoints, srcDir, outDir }),
+			...(esbuildConfig.plugins ?? []),
+		];
+	}
 
 	try {
 		if (options?.watch) {
