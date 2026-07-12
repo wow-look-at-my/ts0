@@ -90,6 +90,20 @@ jobs:
           if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite a type error"; exit 1; fi
           if ts0 test; then echo "FAIL: ts0 test ran tests despite a type error"; exit 1; fi
           echo "Type-check gate OK: build, run, run --no-build, and test all refused broken code"
+          # The same gate covers the js (library) target, including its
+          # declaration pass: a directory entry with a type error must emit
+          # NOTHING -- no .js tree and no partial .d.ts tree (declaration
+          # emit only runs after the gate passes, and is itself
+          # all-or-nothing via noEmitOnError).
+          jsdir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src", "target": "browser" }' > "$jsdir/ts0.json"
+          mkdir -p "$jsdir/src"
+          printf 'export const ok: number = 1;\n' > "$jsdir/src/good.ts"
+          printf 'export const n: number = "nope";\n' > "$jsdir/src/bad.ts"
+          cd "$jsdir"
+          if ts0 build; then echo "FAIL: js-target build succeeded despite a type error"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: js-target build wrote dist/ despite a type error"; exit 1; fi
+          echo "js-target gate OK: no .js and no partial .d.ts emitted"
 
       - name: Test basic sample
         working-directory: samples/basic
@@ -168,6 +182,60 @@ jobs:
           # loaders config: a non-shared .frag import is inlined as text
           # (proves the text loader ran; a JS-module import would error).
           grep -q 'FRAG_MARKER' dist/gfx/shader.js
+          # Declarations (default-on for the js target): every compiled
+          # module gets a parallel .d.ts mirroring the source tree.
+          test -f dist/index.d.ts
+          test -f dist/badge.d.ts
+          test -f dist/math/vec.d.ts
+          test -f dist/math/shape.d.ts
+          test -f dist/gfx/shader.d.ts
+          # .ts/.tsx extension specifiers are preserved in declaration output
+          # (consumers resolve them to the sibling .d.ts by extension
+          # substitution); extensionless imports stay extensionless.
+          grep -q '"./math/vec.ts"' dist/index.d.ts
+          grep -q '"./badge.tsx"' dist/index.d.ts
+          grep -q '"./vec"' dist/math/shape.d.ts
+          # The .tsx component's declaration types it via the configured
+          # jsxImportSource, and the loader-backed import erases to the
+          # annotated plain type (no leaked import of "./triangle.frag").
+          grep -q 'import("preact")' dist/badge.d.ts
+          grep -q 'triangleShader: string' dist/gfx/shader.d.ts
+          ! grep -q 'triangle.frag' dist/gfx/shader.d.ts
+          # Test files produce no output of either kind, and the ambient
+          # declaration source (src/shaders.d.ts) is not copied to dist.
+          ! test -e dist/math/vec.test.js
+          ! test -e dist/math/vec.test.d.ts
+          ! test -e dist/shaders.d.ts
+          # Shared chunks are esbuild artifacts, not source modules: the
+          # declaration tree mirrors sources, so chunks get NO .d.ts.
+          test -z "$(find dist -name 'chunk-*.d.ts')"
+          # sourcemap/shebang behavior is unchanged: no .d.ts.map files
+          # (declarationMap is never enabled), and no shebang on outputs.
+          test -z "$(find dist -name '*.d.ts.map')"
+          ! head -1 dist/index.js | grep -q '^#!'
+          # Determinism: rebuilding from the same input must produce
+          # byte-identical .d.ts (consumers commit fetched copies and rely
+          # on freshness diffs).
+          before=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          rm -rf dist
+          ts0 build
+          after=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+          test "$before" = "$after"
+
+      - name: js target declarations opt-out
+        run: |
+          # "declarations": false must skip the .d.ts pass entirely while the
+          # .js tree still builds -- the escape hatch for projects that can't
+          # or don't want to ship declarations.
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src", "target": "browser", "declarations": false }' > "$dir/ts0.json"
+          mkdir -p "$dir/src"
+          printf 'export const one: number = 1;\n' > "$dir/src/one.ts"
+          cd "$dir"
+          ts0 build
+          test -f dist/one.js
+          test -z "$(find dist -name '*.d.ts')"
+          echo "Opt-out OK: .js emitted, no .d.ts"
 
       - name: Upload html sample build
         if: always()

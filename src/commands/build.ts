@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
@@ -180,6 +180,86 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 	}
 }
 
+// generatedCompilerOptions returns the tsc compiler options derived from the
+// ts0 config, shared by the type-check gate (runTypecheck) and the js target's
+// declaration emit (emitDeclarations). Keeping them in one place guarantees
+// the two passes can't drift: declaration emit compiles under exactly the
+// options the gate checks with.
+//
+// - `lib` depends on target: browser code -- an explicit "browser" target or
+//   any HTML entry (always browser) -- needs the DOM lib so document/fetch/
+//   addEventListener and friends resolve. Node code gets the ESNext lib only;
+//   its globals come from @types/node. Without this, every HTML/browser
+//   project would fail type-checking on "Cannot find name 'document'".
+// - The js (library) target is bundled by esbuild, so it gets bundler module
+//   resolution: it matches esbuild's resolver, permits extensionless relative
+//   imports and loader-backed imports (e.g. `import src from "./shader.wgsl"`),
+//   and doesn't force `.ts` extensions on library source. The default
+//   single-entry target keeps NodeNext.
+// - When JSX is enabled, the matching tsc options are threaded so .tsx files
+//   are handled (esbuild's jsx setting alone does not type-check JSX).
+function generatedCompilerOptions(config: Ts0Config, rootDir: string): Record<string, unknown> {
+	const isBrowser = config.target === "browser" || isHtmlEntry(config.entry);
+	const jsTarget = isJsTarget(config.entry, rootDir);
+	const compilerOptions: Record<string, unknown> = {
+		target: "ESNext",
+		module: jsTarget ? "ESNext" : "NodeNext",
+		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
+		lib: isBrowser ? ["ESNext", "DOM", "DOM.Iterable"] : ["ESNext"],
+		strict: config.strict,
+		skipLibCheck: true,
+		esModuleInterop: true,
+		allowImportingTsExtensions: true,
+	};
+	if (config.jsx) {
+		compilerOptions.jsx = tsconfigJsx(config.jsx);
+		if (config.jsxImportSource) {
+			compilerOptions.jsxImportSource = config.jsxImportSource;
+		}
+	}
+	return compilerOptions;
+}
+
+// runTsc writes a temporary tsconfig (named tempName, in rootDir, deleted in a
+// finally), resolves the TypeScript binary from ts0's own dependencies (so the
+// user's project doesn't need its own typescript install), and runs
+// `tsc --project` against it. Whether the invocation checks or emits is driven
+// entirely by the compilerOptions in tsconfigContent.
+async function runTsc(
+	rootDir: string,
+	tempName: string,
+	tsconfigContent: unknown,
+): Promise<{ success: boolean; output: string }> {
+	const { execSync } = await import("node:child_process");
+	const { createRequire } = await import("node:module");
+
+	// Find tsc from ts0's dependencies, not the project's
+	const require = createRequire(import.meta.url);
+	const tscPath = require.resolve("typescript/bin/tsc");
+
+	// Write temporary tsconfig
+	const { writeFileSync, unlinkSync } = await import("node:fs");
+	const tempTsconfig = join(rootDir, tempName);
+	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
+
+	try {
+		const output = execSync(`node ${tscPath} --project ${tempTsconfig}`, {
+			cwd: rootDir,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return { success: true, output };
+	} catch (err) {
+		const error = err as { stdout?: string; stderr?: string };
+		return {
+			success: false,
+			output: error.stdout || error.stderr || String(err),
+		};
+	} finally {
+		unlinkSync(tempTsconfig);
+	}
+}
+
 // runTypecheck type-checks the project with `tsc --noEmit` using a temporary
 // tsconfig derived from the ts0 config. It is the single source of truth for
 // "does this project type-check"; build() (for build/run) and run() (for the
@@ -201,76 +281,101 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 		return { success: true, output: "No TypeScript sources to check." };
 	}
 
-	// Browser code -- an explicit "browser" target or any HTML entry (always
-	// browser) -- needs the DOM lib so document/fetch/addEventListener and
-	// friends resolve. Node code gets the ESNext lib only; its globals come
-	// from @types/node. Without this, every HTML/browser project would fail
-	// type-checking on "Cannot find name 'document'".
-	const isBrowser = config.target === "browser" || isHtmlEntry(config.entry);
-
-	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
-	// thread the matching tsc options so .tsx files are type-checked (esbuild's
-	// jsx setting alone does not type-check JSX).
-	//
-	// The js (library) target is bundled by esbuild, so type-check it with
-	// bundler module resolution: it matches esbuild's resolver, permits
-	// extensionless relative imports and loader-backed imports (e.g.
-	// `import src from "./shader.wgsl"`), and doesn't force `.ts` extensions on
-	// library source. The default single-entry target keeps NodeNext.
-	const jsTarget = isJsTarget(config.entry, rootDir);
-	const compilerOptions: Record<string, unknown> = {
-		target: "ESNext",
-		module: jsTarget ? "ESNext" : "NodeNext",
-		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
-		lib: isBrowser ? ["ESNext", "DOM", "DOM.Iterable"] : ["ESNext"],
-		strict: config.strict,
-		noEmit: true,
-		skipLibCheck: true,
-		esModuleInterop: true,
-		allowImportingTsExtensions: true,
-	};
-	if (config.jsx) {
-		compilerOptions.jsx = tsconfigJsx(config.jsx);
-		if (config.jsxImportSource) {
-			compilerOptions.jsxImportSource = config.jsxImportSource;
-		}
-	}
 	const tsconfigContent = {
-		compilerOptions,
+		compilerOptions: { ...generatedCompilerOptions(config, rootDir), noEmit: true },
 		// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
 		// TypeScript variants are type-checked too.
 		include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
 		exclude: ["node_modules", ...excludeDirs],
 	};
 
-	const { execSync } = await import("node:child_process");
-	const { createRequire } = await import("node:module");
-
-	// Find tsc from ts0's dependencies, not the project's
-	const require = createRequire(import.meta.url);
-	const tscPath = require.resolve("typescript/bin/tsc");
-
-	// Write temporary tsconfig
-	const { writeFileSync, unlinkSync } = await import("node:fs");
-	const tempTsconfig = join(rootDir, ".ts0-tsconfig.json");
-	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
-
-	try {
-		const output = execSync(`node ${tscPath} --project ${tempTsconfig}`, {
-			cwd: rootDir,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		return { success: true, output: output || "No type errors found." };
-	} catch (err) {
-		const error = err as { stdout?: string; stderr?: string };
-		return {
-			success: false,
-			output: error.stdout || error.stderr || String(err),
-		};
-	} finally {
-		unlinkSync(tempTsconfig);
+	const result = await runTsc(rootDir, ".ts0-tsconfig.json", tsconfigContent);
+	if (result.success) {
+		return { success: true, output: result.output || "No type errors found." };
 	}
+	return result;
+}
+
+// collectAmbientDeclarations returns the project's *.d.ts files (ambient
+// declarations like `declare module "*.wgsl"`), excluding node_modules, the
+// output directory, dotfiles, and nested ts0 projects -- the same exclusions
+// as the type-check gate. The declaration-emit pass lists its inputs
+// explicitly (a `files` array, not a glob), so ambient declarations must be
+// added back or loader-backed imports would fail to resolve there (TS2307).
+// Declaration inputs never produce output and are exempt from the rootDir
+// requirement, so they may live anywhere in the project.
+function collectAmbientDeclarations(rootDir: string, config: Ts0Config): string[] {
+	const outDirAbs = resolve(rootDir, config.outdir || "dist");
+	const found: string[] = [];
+	const walk = (dir: string): void => {
+		for (const name of readdirSync(dir)) {
+			if (name === "node_modules" || name.startsWith(".")) continue;
+			const p = join(dir, name);
+			if (statSync(p).isDirectory()) {
+				if (resolve(p) === outDirAbs) continue;
+				if (existsSync(join(p, "ts0.json"))) continue; // nested project
+				walk(p);
+				continue;
+			}
+			if (/\.d\.(ts|mts|cts)$/i.test(name)) found.push(p);
+		}
+	};
+	walk(rootDir);
+	return found;
+}
+
+// emitDeclarations runs a declaration-only tsc pass for the js (library)
+// target: every compiled module gets a parallel *.d.ts under outDir, mirroring
+// the source tree exactly like the *.js outputs (src/ui/x.ts ->
+// dist/ui/x.d.ts). Only build-js.ts calls it, and only on the build path --
+// `ts0 run`/`ts0 test` never emit anything, and the type-check gate stays
+// exactly as strict as before (this pass is additional, never a replacement).
+//
+// The pass compiles exactly the entry-point set esbuild compiled (tests and
+// *.d.ts sources are already excluded from it) plus the project's ambient
+// declarations, so shared chunks -- an esbuild output artifact, not a source
+// module -- never get a .d.ts, and loader-backed imports resolve the same way
+// they do in the gate.
+//
+// noEmitOnError makes the pass all-or-nothing: tsc writes NOTHING unless the
+// whole program is clean, so a diagnostic unique to declaration emit (e.g.
+// TS4023 "cannot be named", or TS6059 when an entry imports a source from
+// outside the entry directory -- unrepresentable in a mirrored tree) can never
+// leave a partial .d.ts tree behind. Plain type errors can't even get this
+// far: build()'s gate (or the watch plugin) already failed the build.
+//
+// Emitted declarations keep their source specifiers. A `./x.ts` (or `.tsx`)
+// specifier in a .d.ts is the standard shape for allowImportingTsExtensions
+// projects: consumers resolve it by extension substitution (.ts -> .tsx ->
+// .d.ts), landing on the deployed sibling x.d.ts -- verified under both
+// bundler and NodeNext consumer resolution. (TypeScript 5.7's
+// rewriteRelativeImportExtensions is deliberately not used: it rewrites only
+// JavaScript emit, never declaration emit, and declarations don't need it.)
+export async function emitDeclarations(
+	config: Ts0Config,
+	rootDir: string,
+	opts: { entryPoints: string[]; srcDir: string; outDir: string },
+): Promise<{ success: boolean; output: string }> {
+	// Relative, forward-slash, sorted file list: deterministic tsconfig
+	// content for identical inputs (the .d.ts output itself is deterministic
+	// too -- consumers commit fetched copies and diff them for freshness).
+	const files = [...opts.entryPoints, ...collectAmbientDeclarations(rootDir, config)]
+		.map((p) => relative(rootDir, p).split(/[\\/]/).join("/"))
+		.sort();
+
+	const tsconfigContent = {
+		compilerOptions: {
+			...generatedCompilerOptions(config, rootDir),
+			declaration: true,
+			emitDeclarationOnly: true,
+			noEmitOnError: true,
+			outDir: opts.outDir,
+			rootDir: opts.srcDir,
+		},
+		files,
+	};
+
+	return runTsc(rootDir, ".ts0-tsconfig-emit.json", tsconfigContent);
 }
 
 // typecheckPlugin runs the type-check at the start of every esbuild build,

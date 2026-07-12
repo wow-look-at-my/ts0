@@ -93,6 +93,7 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `jsx`       | `"automatic" \| "transform" \| "preserve"` | &mdash; | Enable JSX/TSX. `"automatic"` uses the modern runtime (no factory import; pair with `jsxImportSource`); `"transform"` is the classic `React.createElement`; `"preserve"` leaves JSX as-is. |
 | `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
 | `loaders`   | `object`              | &mdash;            | Map file extensions to loader names (`text`, `dataurl`, `base64`, `binary`, `file`, `json`, …), e.g. `{ ".wgsl": "text" }`. The friendly way to import non-JS/TS files; applies to the default and js targets. |
+| `declarations` | `boolean`          | `true`             | js (library) target only: emit a parallel `*.d.ts` tree into `outdir` alongside the compiled `*.js` (see [Type declarations](#type-declarations)). Set `false` to skip. Ignored by the single-entry and HTML targets. |
 | `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
 When `outfile` is set, `ts0` produces a single executable file with a Node shebang &mdash;
@@ -158,7 +159,9 @@ every `*.ts`/`*.tsx` file under that directory is compiled to a parallel `*.js`
 file under `outdir`, preserving the directory structure
 (`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). This is the shape a library
 deployed to static hosting (GitHub Pages, a CDN) wants — consumers import an
-individual module by URL.
+individual module by URL. Each module also gets a matching `*.d.ts` by default
+(see [Type declarations](#type-declarations) below), so those consumers can
+fetch type declarations from the same URLs as the code.
 
 ```json
 {
@@ -188,6 +191,42 @@ individual module by URL.
     output always goes to `outdir`.
 
 See `samples/js` for a complete example.
+
+#### Type declarations
+
+By default the js target also emits TypeScript declarations: every compiled
+module gets a parallel `*.d.ts` under `outdir`, mirroring the source tree
+exactly like the `*.js` outputs (`src/ui/timeline-view.ts` →
+`dist/ui/timeline-view.js` **and** `dist/ui/timeline-view.d.ts`). A library
+deployed to static hosting thus ships its types at the same URLs as its code —
+a consumer fetches `x.js` for the runtime and `x.d.ts` next to it for the
+types, and TypeScript pairs them up automatically.
+
+- **Default on.** A library target exists to be consumed; set
+    `"declarations": false` in `ts0.json` to opt out.
+- Emission is a separate `tsc` pass (`declaration` + `emitDeclarationOnly`)
+    over exactly the modules the build compiled, so tests, `*.d.ts` sources,
+    and esbuild's shared `chunk-*.js` files never get declarations. It runs
+    only on `ts0 build` (and each watch rebuild) — `ts0 run`/`ts0 test` never
+    write output.
+- The pass is **all-or-nothing**: any error (a type error never gets this far;
+    think declaration-only diagnostics like TS4023 "cannot be named") fails
+    the build and writes no `.d.ts` at all — there is no partial tree. Output
+    is deterministic: the same input produces byte-identical `.d.ts`, so
+    committed copies of fetched declarations diff cleanly.
+- Relative import specifiers are kept as written, including explicit `.ts` /
+    `.tsx` extensions. That is the standard declaration shape for
+    `allowImportingTsExtensions` projects: TypeScript resolves `./x.ts` inside
+    a `.d.ts` by extension substitution (`.ts` → `.tsx` → `.d.ts`) to the
+    deployed sibling `x.d.ts`, under both `bundler` and `NodeNext` consumer
+    resolution. No rewriting is needed (and TypeScript's
+    `rewriteRelativeImportExtensions` wouldn't help — it only affects
+    JavaScript emit).
+- One structural constraint: declaration output mirrors the entry directory,
+    so a module importing a **source outside the entry directory** fails the
+    build with `TS6059` (esbuild can inline such an import into the `.js`, but
+    a mirrored `.d.ts` tree cannot represent it). Move the file under the
+    entry directory or set `"declarations": false`.
 
 ### JSX / TSX
 

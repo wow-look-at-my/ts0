@@ -19,9 +19,9 @@ src/
     config.ts           # ts0.json loader, defaults, entry auto-detection
     commands/
         init.ts         # scaffolds ts0.json + src/ + package.json
-        build.ts        # type-check gate (runTypecheck) + esbuild bundle (dispatches HTML/js)
+        build.ts        # type-check gate (runTypecheck) + declaration emit (emitDeclarations) + esbuild bundle (dispatches HTML/js)
         build-html.ts   # bundles an .html entry into a single inlined .html
-        build-js.ts     # compiles a directory entry into a parallel .js tree (type-checked)
+        build-js.ts     # compiles a directory entry into a parallel .js (+ .d.ts) tree (type-checked)
         esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
         run.ts          # type-check, then build+node (or strip-types+node for --no-build)
         test.ts         # type-check, then node --test on discovered test files
@@ -77,13 +77,22 @@ CLI end-to-end by:
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
     chunk (the shared body appears in exactly one output file, not copied into
     each importer), inlined a non-shared `.frag` text-loader import, and emitted
-    no sourcemaps.
+    no sourcemaps. The same step asserts the **declaration emit**: a parallel
+    `dist/**/*.d.ts` tree mirroring the sources (including a `.tsx` component),
+    `.ts`/`.tsx` extension specifiers preserved in declaration output,
+    no `.d.ts` for test files or esbuild chunks, the ambient `*.d.ts` source
+    not copied, no `.d.ts.map`, and byte-identical `.d.ts` across a rebuild
+    (determinism). A follow-up step proves `"declarations": false` opts out
+    (`.js` emitted, zero `.d.ts`).
 8. The "Type-check gate blocks broken output" step: a project with a deliberate
     type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
     `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
     nothing (no `dist/`, no test run). The error strips to valid JS and the test
     file registers no tests, so a `--no-build` or `test` run would exit 0 if the
     check were ever skipped &mdash; this step catches exactly that regression.
+    It also repeats the check for a **js (directory) target**, proving a type
+    error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
+    tree.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -152,6 +161,17 @@ is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
 project doesn't need its own `typescript` install. Preserve both behaviors.
 `build()`, `run()`, and `test()` each already hold a loaded config, so they call
 `runTypecheck(config, rootDir)` directly rather than re-loading.
+
+The tsconfig generation is shared: `generatedCompilerOptions(config, rootDir)`
+builds the compiler options used by BOTH the gate and the js target's
+declaration emit (`emitDeclarations`, temp file `.ts0-tsconfig-emit.json`, also
+gitignored), and `runTsc()` owns the write-temp-tsconfig/exec/cleanup plumbing
+for both. Keep them shared &mdash; if the two passes drift, declaration emit
+can succeed on code the gate rejects (or vice versa). The declaration pass is
+**additional** to the gate, never a replacement: it compiles only the js
+target's entry modules (+ ambient `*.d.ts`), so it does not see test files or
+sources outside the entry set the way the project-wide gate does. Do not
+"optimize" the gate away on the build path.
 
 Key details of the generated tsconfig:
 
@@ -294,6 +314,39 @@ esbuild by `baseEsbuildOptions`) and provide an ambient `declare module "*.wgsl"
 so the import also type-checks; esbuild does the actual inlining. ts0 applies no
 loaders by default. (The `esbuild.loader` escape hatch still works and overrides
 `loaders`.)
+
+### Declaration emit (js target only)
+
+Unless `"declarations": false`, the js target emits a parallel `*.d.ts` tree
+into outdir next to the `*.js` outputs (`src/ui/x.ts` → `dist/ui/x.js` +
+`dist/ui/x.d.ts`), so a deployed library ships types at the same URLs as its
+code. Mechanics (see `emitDeclarations` in build.ts and `declarationsPlugin`
+in build-js.ts):
+
+- It is a second tsc pass (`declaration` + `emitDeclarationOnly` +
+    `noEmitOnError`, `outDir` = the build outdir, `rootDir` = the entry dir)
+    over **exactly the entry-point set esbuild compiled** plus the project's
+    ambient `*.d.ts` files (`collectAmbientDeclarations` &mdash; needed so
+    loader-backed imports resolve; ambient inputs emit nothing and are exempt
+    from `rootDir`). Consequences: test files and esbuild's `chunk-*.js` never
+    get a `.d.ts`, and `*.d.ts` sources aren't copied.
+- It runs in an esbuild `onEnd` hook, one-shot AND watch, only after a
+    successful build; an emit failure fails the build. `noEmitOnError` makes
+    it all-or-nothing &mdash; no partial `.d.ts` tree can ever land. `ts0 run`
+    / `ts0 test` never invoke it (they must not write output).
+- Emitted declarations **keep source specifiers**, including explicit
+    `.ts`/`.tsx` extensions &mdash; that is the standard shape for
+    `allowImportingTsExtensions` projects. Consumers resolve `./x.ts` inside a
+    `.d.ts` via extension substitution (`.ts` → `.tsx` → `.d.ts`) to the
+    deployed sibling `x.d.ts`; verified under both bundler and NodeNext
+    consumer resolution. Do NOT add `rewriteRelativeImportExtensions`: it
+    rewrites JavaScript emit only (never declarations) and is unnecessary.
+- Output is deterministic (same input → byte-identical `.d.ts`); CI asserts
+    this, because consumers commit fetched copies and diff them.
+- Known constraint: an entry importing a source file **outside the entry
+    directory** fails the pass with TS6059 (a mirrored tree can't represent
+    it), loudly and with nothing written. The opt-out is
+    `"declarations": false`.
 
 ## Distributing via `npm install github:wow-look-at-my/bundler`
 
