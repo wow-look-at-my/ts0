@@ -53,6 +53,14 @@ export interface Ts0Config {
 	jsx?: "automatic" | "transform" | "preserve";
 	jsxImportSource?: string;
 
+	// js (library) target only: emit TypeScript declaration files. Every
+	// compiled module gets a parallel *.d.ts under outdir, mirroring the
+	// source tree exactly like the *.js outputs (src/ui/x.ts ->
+	// dist/ui/x.d.ts), so a deployed library ships types next to its code.
+	// Default true (undefined = on); set false to skip declaration emit.
+	// Ignored by the single-entry and HTML targets.
+	declarations?: boolean;
+
 	// Map file extensions to how their imports are loaded, e.g.
 	// { ".wgsl": "text" } to import shader files as strings, or
 	// { ".png": "dataurl" } to inline images. Values are loader names
