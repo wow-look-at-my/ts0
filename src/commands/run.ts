@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { join, basename } from "node:path";
 import { loadConfig } from "../config.ts";
+import { seaBridge } from "../sea/bridge.ts";
 import { build, runTypecheck } from "./build.ts";
 import { isHtmlEntry } from "./build-html.ts";
 import { isJsTarget } from "./build-js.ts";
@@ -88,10 +89,20 @@ export async function run(options: RunOptions = {}): Promise<void> {
 async function runWithNode(file: string, args: string[], stripTypes: boolean): Promise<void> {
 	const nodeArgs = stripTypes ? ["--experimental-strip-types", file, ...args] : [file, ...args];
 
-	const child = spawn("node", nodeArgs, {
-		stdio: "inherit",
-		cwd: process.cwd(),
-	});
+	// Inside the prebuilt SEA binary there is no `node` on PATH; the bridge
+	// re-invokes the binary itself in run-dispatch mode, which import()s the
+	// file (Node strips types for on-disk .ts by default there, covering the
+	// --no-build path). The npm build has no bridge and spawns node as before.
+	const bridge = seaBridge();
+	const child = bridge
+		? spawn(bridge.execPath, bridge.runArgs(file, args), {
+				stdio: "inherit",
+				cwd: process.cwd(),
+			})
+		: spawn("node", nodeArgs, {
+				stdio: "inherit",
+				cwd: process.cwd(),
+			});
 
 	return new Promise((resolve, reject) => {
 		child.on("close", (code) => {

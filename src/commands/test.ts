@@ -3,6 +3,7 @@ import { glob } from "node:fs/promises";
 import { watch as fsWatch } from "node:fs";
 import { join, extname } from "node:path";
 import { loadConfig } from "../config.ts";
+import { seaBridge } from "../sea/bridge.ts";
 import { runTypecheck } from "./build.ts";
 
 export interface TestOptions {
@@ -40,11 +41,18 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	// the exit code (0 = pass). Only ever called after typecheckPasses().
 	const runTests = (testFiles: string[]): Promise<number> => {
 		console.log(`Found ${testFiles.length} test file(s)\n`);
-		const child = spawn(
-			"node",
-			["--experimental-strip-types", "--test", ...testFiles.map((f) => join(rootDir, f))],
-			{ stdio: "inherit", cwd: rootDir },
-		);
+		// Inside the prebuilt SEA binary there is no `node` on PATH; the
+		// bridge re-invokes the binary itself in test-dispatch mode, which
+		// runs the files in-process via node:test's run() API. The npm build
+		// has no bridge and spawns node's --test runner as before.
+		const bridge = seaBridge();
+		const files = testFiles.map((f) => join(rootDir, f));
+		const child = bridge
+			? spawn(bridge.execPath, bridge.testArgs(files), { stdio: "inherit", cwd: rootDir })
+			: spawn("node", ["--experimental-strip-types", "--test", ...files], {
+					stdio: "inherit",
+					cwd: rootDir,
+				});
 		return new Promise((resolve, reject) => {
 			child.on("close", (code) => resolve(code ?? 1));
 			child.on("error", reject);

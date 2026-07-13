@@ -21,6 +21,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
+		"postject": "1.0.0-alpha.6",
 		"preact": "^10.25.4"
 	},
 	"engines": {
