@@ -9,12 +9,57 @@ without writing a `tsconfig.json`, picking a bundler, or wiring up a test framew
 ## Requirements
 
 - Node.js **22 or newer** (uses `--experimental-strip-types` and the built-in test runner)
+- &hellip;or **no Node at all** when using a [prebuilt binary](#prebuilt-binaries-buildhost),
+    which embeds the runtime.
 
 ## Install
 
 ```sh
 npm install -g ts0
 ```
+
+### Prebuilt binaries (buildhost)
+
+For machines with **nothing installed** &mdash; no Node, no npm &mdash; ts0 ships as a
+fully self-contained single executable on the org buildhost. The binary embeds the
+Node 22 runtime, the bundled CLI, the TypeScript compiler, and esbuild (including its
+platform-native binary):
+
+```sh
+curl -fL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" -o ts0
+chmod +x ts0
+./ts0 build
+```
+
+| Platform | URL parameters |
+| -------- | -------------- |
+| Linux x86-64 | `os=linux&arch=amd64` |
+| Linux ARM64 | `os=linux&arch=arm64` |
+| macOS Apple Silicon | `os=darwin&arch=arm64` |
+| macOS Intel | `os=darwin&arch=amd64` |
+| Windows x86-64 | `os=windows&arch=amd64` (an `.exe`; save it as `ts0.exe`) |
+
+**Version pinning.** `?branch=master` resolves to the latest build of master and moves
+on every merge; `?v=N` (e.g. `?v=1`) is an immutable release and never changes.
+**Pin `?v=N` in anything that needs reproducible output** (a `//go:generate` step, a
+Dockerfile); use `?branch=master` only where tracking latest is the point. To find the
+current N, read the `Location` header of a branch download (it redirects to
+`...&v=N&...`) or `GET https://pazer.build/api/v1/projects/ts0/releases`. Downloads
+are anonymous (the project is public); add `&fmt=tar.gz` (or `zip`, ...) to download
+repackaged instead of raw.
+
+**First-run extraction.** On first use the binary extracts its embedded toolchain
+(tsc, esbuild, the runtime template) to `~/.cache/ts0/<build-id>/` &mdash; override the
+location with `TS0_CACHE_DIR`. Later runs reuse the extraction; the build id changes
+with every release, so upgrades never collide and no cleanup is needed beyond deleting
+the directory.
+
+**Scope.** The binary bundles the *toolchain*, not your project's dependencies: a
+project that imports npm packages &mdash; including `@types/node` for Node-target
+globals &mdash; still needs its own `node_modules` (installed however you like).
+Browser-target and dependency-free projects build with the binary alone. The macOS
+binaries are ad-hoc code-signed; Gatekeeper treats a `curl`-downloaded binary like any
+other terminal tool.
 
 ## Quick start
 

@@ -23,6 +23,11 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 # additionally needs the system vars without which no process runs sanely.
 CLEAN_PATH="/usr/bin:/bin"
 TS0_CACHE=$(mktemp -d)
+# On git-bash the msys /tmp is invisible to native Windows processes; hand
+# the cache dir around in mixed form (C:/...) which both sides understand.
+if command -v cygpath >/dev/null 2>&1; then
+	TS0_CACHE=$(cygpath -m "$TS0_CACHE")
+fi
 CLEAN_ENV=(env -i PATH="$CLEAN_PATH" HOME="$HOME" TS0_CACHE_DIR="$TS0_CACHE")
 case "$(uname -s)" in
 	MINGW*|MSYS*|CYGWIN*)

@@ -250,3 +250,239 @@ jobs:
         with:
           name: html-jsx-sample
           path: samples/html-jsx/dist/index.html
+
+  # ---------------------------------------------------------------------------
+  # Prebuilt single-executable (SEA) binaries, published to buildhost so
+  # non-node consumers (e.g. webhook-runner's //go:generate) can
+  # `curl https://dl.pazer.build/ts0?...` a self-contained ts0.
+  # scripts/build-sea.ts documents the packaging; scripts/sea-smoke.sh is the
+  # clean-environment (no node on PATH) verification each smoke job runs.
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build SEA binaries (all platforms)
+        run: npm run build:sea
+
+      - name: Clean-environment smoke (linux/amd64, no node on PATH)
+        run: scripts/sea-smoke.sh build-sea/out/ts0_linux_amd64
+
+      - name: Upload SEA binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sea-binaries
+          path: build-sea/out/
+          if-no-files-found: error
+
+  smoke-sea-linux-arm64:
+    needs: package
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # The samples' type-check resolves @types/node and preact from the
+      # repo's node_modules -- project dependencies, not toolchain pieces.
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sea-binaries
+          path: build-sea/out
+
+      - name: Clean-environment smoke (linux/arm64)
+        run: |
+          chmod +x build-sea/out/ts0_linux_arm64
+          scripts/sea-smoke.sh build-sea/out/ts0_linux_arm64
+
+  smoke-sea-macos:
+    needs: package
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sea-binaries
+          path: build-sea/out
+
+      # Blob injection invalidated the Apple code signature (the packaging
+      # runs on Linux). arm64 macOS refuses to execute unsigned native
+      # binaries at all, so ad-hoc re-sign both darwin artifacts with the
+      # real codesign; these signed files are what publish ships.
+      - name: Ad-hoc sign the darwin binaries
+        run: |
+          chmod +x build-sea/out/ts0_darwin_arm64 build-sea/out/ts0_darwin_amd64
+          codesign --force --sign - build-sea/out/ts0_darwin_arm64
+          codesign --force --sign - build-sea/out/ts0_darwin_amd64
+          codesign --verify --verbose build-sea/out/ts0_darwin_arm64
+          codesign --verify --verbose build-sea/out/ts0_darwin_amd64
+
+      - name: Clean-environment smoke (darwin/arm64)
+        run: scripts/sea-smoke.sh build-sea/out/ts0_darwin_arm64
+
+      # Best-effort execution gate for the Intel binary: GitHub's arm64 mac
+      # runners ship Rosetta 2. If Rosetta is ever missing this degrades to a
+      # notice (the binary still ships, built+signed by the same recipe as
+      # the executed arm64 one); when Rosetta IS present a broken binary
+      # fails the job.
+      - name: darwin/amd64 smoke under Rosetta
+        run: |
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::notice::Rosetta 2 unavailable; darwin/amd64 ships signed but unexecuted"
+            exit 0
+          fi
+          dir=$(mktemp -d)
+          cd "$dir"
+          printf '%s\n' '{ "entry": "src", "target": "browser" }' > ts0.json
+          mkdir src
+          printf 'export const ok: number = 1;\n' > src/ok.ts
+          TS0_CACHE_DIR=$(mktemp -d) "$GITHUB_WORKSPACE/build-sea/out/ts0_darwin_amd64" build
+          test -f dist/ok.js
+          test -f dist/ok.d.ts
+
+      - name: Upload signed darwin binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sea-darwin-signed
+          path: |
+            build-sea/out/ts0_darwin_arm64
+            build-sea/out/ts0_darwin_amd64
+          if-no-files-found: error
+
+  smoke-sea-windows:
+    needs: package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sea-binaries
+          path: build-sea/out
+
+      - name: Clean-environment smoke (windows/amd64)
+        run: |
+          chmod +x build-sea/out/ts0_windows_amd64.exe
+          scripts/sea-smoke.sh build-sea/out/ts0_windows_amd64.exe
+
+  # The single publish path: master only, gated on every smoke job so a
+  # binary that cannot actually run is never released. Auth is a GitHub
+  # Actions OIDC token (buildhost trusts the issuer directly and
+  # auto-provisions the project on first push); uploads go through the
+  # buildhost CLI, whose chunked upload sessions handle binaries larger than
+  # the edge's ~95 MiB direct-body cap. The darwin artifacts are taken from
+  # the macOS job's output so exactly the signed, smoke-tested bytes ship.
+  publish:
+    if: github.ref == 'refs/heads/master'
+    needs: [test, package, smoke-sea-linux-arm64, smoke-sea-macos, smoke-sea-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sea-binaries
+          path: sea
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sea-darwin-signed
+          path: sea-darwin
+
+      - name: Publish to buildhost
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const server = "https://pazer.build";
+            const project = "ts0";
+            const token = await core.getIDToken(server);
+            if (!token) {
+              core.setFailed("failed to mint an OIDC token for buildhost");
+              return;
+            }
+
+            const cli = path.join(env.RUNNER_TEMP ?? os.tmpdir(), "buildhost");
+            await $`curl -fSL --retry 3 -o ${cli} https://dl.pazer.build/buildhost?os=linux&arch=amd64`;
+            await $`chmod +x ${cli}`;
+
+            const files = [
+              { os: "linux", arch: "amd64", file: "sea/ts0_linux_amd64", filename: "ts0" },
+              { os: "linux", arch: "arm64", file: "sea/ts0_linux_arm64", filename: "ts0" },
+              { os: "darwin", arch: "amd64", file: "sea-darwin/ts0_darwin_amd64", filename: "ts0" },
+              { os: "darwin", arch: "arm64", file: "sea-darwin/ts0_darwin_arm64", filename: "ts0" },
+              { os: "windows", arch: "amd64", file: "sea/ts0_windows_amd64.exe", filename: "ts0.exe" },
+            ];
+            for (const f of files) {
+              if (!fs.existsSync(f.file)) {
+                core.setFailed(`missing artifact: ${f.file}`);
+                return;
+              }
+            }
+
+            // One release, five artifacts: the CLI's manifest mode creates
+            // the release (git_branch makes ?branch=master resolve), uploads
+            // each artifact (chunked automatically when needed), then
+            // publishes.
+            const lines = [
+              `server = ${JSON.stringify(server)}`,
+              `token = ${JSON.stringify(token)}`,
+              `project = ${JSON.stringify(project)}`,
+              `git_branch = ${JSON.stringify(github.ref_name)}`,
+              `git_commit = ${JSON.stringify(github.sha)}`,
+            ];
+            for (const f of files) {
+              lines.push(
+                "",
+                "[[artifact]]",
+                `os = ${JSON.stringify(f.os)}`,
+                `arch = ${JSON.stringify(f.arch)}`,
+                'kind = "binary"',
+                `path = ${JSON.stringify(path.resolve(f.file))}`,
+                `filename = ${JSON.stringify(f.filename)}`,
+              );
+            }
+            const manifest = path.join(env.RUNNER_TEMP ?? os.tmpdir(), "buildhost-manifest.toml");
+            fs.writeFileSync(manifest, lines.join("\n") + "\n", { mode: 0o600 });
+            await $`${cli} publish --manifest ${manifest}`;
+
+            // The consumer-visible contract: the branch-latest download URL
+            // resolves (302 to the static endpoint) as soon as publish runs.
+            const url = `https://dl.pazer.build/${project}?branch=${github.ref_name}&os=linux&arch=amd64`;
+            const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+            core.info(`${url} -> HTTP ${resp.status}`);
+            if (resp.status !== 302 && resp.status !== 200) {
+              core.setFailed(`published, but the branch download URL did not resolve (HTTP ${resp.status})`);
+            }
