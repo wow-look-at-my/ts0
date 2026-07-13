@@ -250,3 +250,208 @@ jobs:
         with:
           name: html-jsx-sample
           path: samples/html-jsx/dist/index.html
+
+  # ---------------------------------------------------------------------------
+  # Prebuilt ts0.cjs for buildhost: ONE platform-neutral CommonJS file (the
+  # CLI + esbuild JS API + the TypeScript compiler inlined) that runs on
+  # stock Node >= 22 with no npm, plus the five platform-native esbuild
+  # binaries it fetches on first run. Consumers:
+  #   curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
+  #   node ts0.cjs build            # or: curl -fsSL "...?..." | node - build
+  # scripts/build-prebuilt.ts documents the packaging; prebuilt-smoke.sh is
+  # the bare-node (no npm on PATH) verification.
+
+  prebuilt:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build ts0.cjs + esbuild natives
+        run: npm run build:prebuilt
+
+      - name: Bare-node smoke (node on PATH, no npm)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
+
+      - name: Upload prebuilt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt
+          path: build-prebuilt/out/
+          if-no-files-found: error
+
+  # Repeats the bare-node smoke on real arm64, exercising the linux/arm64
+  # esbuild native end-to-end. The darwin/windows natives ship without a CI
+  # execution job on purpose: they are upstream esbuild release binaries
+  # (registry tarballs verified against the package-lock sha512), and
+  # ts0.cjs itself is platform-neutral and fully smoked here.
+  smoke-prebuilt-linux-arm64:
+    needs: prebuilt
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # The samples' type-check resolves @types/node and preact from the
+      # repo's node_modules -- project dependencies, not toolchain pieces.
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prebuilt
+          path: build-prebuilt/out
+
+      - name: Bare-node smoke (linux/arm64)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
+
+  # The single publish path: master only, gated on both smokes. Auth is a
+  # GitHub Actions OIDC token (buildhost trusts the issuer directly and
+  # auto-provisions projects on first push; public because this repo is
+  # public). Two buildhost projects:
+  #   ts0/esbuild-<version>  the five natives -- immutable per esbuild
+  #                          version, published only when that version's
+  #                          project has nothing downloadable yet;
+  #   ts0                    ts0.cjs, one release per master merge, uploaded
+  #                          ONCE under os=cosmo/arch=any (buildhost's
+  #                          multi-platform alias: one stored body, rows for
+  #                          every os/arch pair, so any ?os=..&arch=..
+  #                          download resolves).
+  # Natives publish first so a fresh ts0.cjs never points at unpublished
+  # natives. Every payload is far below the ~95 MiB direct-upload cap.
+  publish:
+    if: github.ref == 'refs/heads/master'
+    needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: prebuilt
+          path: prebuilt
+
+      - name: Publish to buildhost
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const server = "https://pazer.build";
+            const dl = "https://dl.pazer.build";
+            const token = await core.getIDToken(server);
+            if (!token) {
+              core.setFailed("failed to mint an OIDC token for buildhost");
+              return;
+            }
+
+            const meta = JSON.parse(fs.readFileSync("prebuilt/meta.json", "utf-8")) as {
+              esbuildVersion: string;
+              buildId: string;
+              natives: { os: string; arch: string; file: string }[];
+            };
+            const nativesProject = `ts0/esbuild-${meta.esbuildVersion}`;
+
+            // Small retry for transient edge errors during buildhost deploys
+            // (5xx / connection failures / empty-body 404s from the proxy; a
+            // real app error always carries a JSON body).
+            const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            const api = async (method: string, urlPath: string, body?: Buffer | string, headers: Record<string, string> = {}) => {
+              const h: Record<string, string> = { Authorization: `Bearer ${token}`, ...headers };
+              if (typeof body === "string") h["Content-Type"] = "application/json";
+              else if (body) h["Content-Type"] = "application/octet-stream";
+              for (let attempt = 1; ; attempt++) {
+                try {
+                  const resp = await fetch(`${server}${urlPath}`, { method, headers: h, body });
+                  const text = await resp.text();
+                  if (attempt >= 3 || !(resp.status >= 500 || (resp.status === 404 && text.trim() === ""))) {
+                    return { status: resp.status, text };
+                  }
+                  core.warning(`${method} ${urlPath} -> HTTP ${resp.status} (transient, attempt ${attempt}/3)`);
+                } catch (err) {
+                  if (attempt >= 3) return { status: 0, text: String(err) };
+                  core.warning(`${method} ${urlPath} -> ${String(err)} (attempt ${attempt}/3)`);
+                }
+                await sleep(1000 * 2 ** (attempt - 1));
+              }
+            };
+
+            const releaseBody = JSON.stringify({ git_branch: github.ref_name, git_commit: github.sha });
+
+            const publishRelease = async (
+              project: string,
+              artifacts: { os: string; arch: string; file: string; filename: string }[],
+            ): Promise<string> => {
+              const created = await api("POST", `/api/v1/projects/${project}/releases`, releaseBody);
+              if (created.status !== 201) {
+                throw new Error(`create release for ${project} failed (${created.status}): ${created.text}`);
+              }
+              const version = (JSON.parse(created.text) as { version: string }).version;
+              for (const a of artifacts) {
+                const bytes = fs.readFileSync(a.file);
+                const put = await api(
+                  "PUT",
+                  `/api/v1/projects/${project}/releases/${version}/artifacts/${a.os}/${a.arch}?kind=binary`,
+                  bytes,
+                  { "X-Artifact-Filename": a.filename },
+                );
+                if (put.status !== 201) {
+                  throw new Error(`upload ${project} ${a.os}/${a.arch} failed (${put.status}): ${put.text}`);
+                }
+                core.info(`uploaded ${project}/${version} ${a.os}/${a.arch} (${bytes.length} bytes)`);
+              }
+              const pub = await api("POST", `/api/v1/projects/${project}/releases/${version}/publish`);
+              if (pub.status !== 200) {
+                throw new Error(`publish ${project}/${version} failed (${pub.status}): ${pub.text}`);
+              }
+              core.info(`published ${project}/${version}`);
+              return version;
+            };
+
+            // 1) The natives, once per esbuild version: skip when that
+            // version's project already resolves a download (immutable).
+            const nativeProbeUrl = `${dl}/${nativesProject}?os=linux&arch=amd64`;
+            const probe = await fetch(nativeProbeUrl, { method: "HEAD", redirect: "manual" });
+            if (probe.status === 200 || probe.status === 302) {
+              core.info(`${nativesProject} already published (probe HTTP ${probe.status}); skipping natives`);
+            } else {
+              core.info(`probe ${nativeProbeUrl} -> HTTP ${probe.status}; publishing natives`);
+              await publishRelease(
+                nativesProject,
+                meta.natives.map((n) => ({
+                  os: n.os,
+                  arch: n.arch,
+                  file: `prebuilt/${n.file}`,
+                  filename: n.os === "windows" ? "esbuild.exe" : "esbuild",
+                })),
+              );
+            }
+
+            // 2) ts0.cjs: one platform-neutral artifact per release, stored
+            // once and addressable under every os/arch pair.
+            const version = await publishRelease("ts0", [
+              { os: "cosmo", arch: "any", file: "prebuilt/ts0.cjs", filename: "ts0.cjs" },
+            ]);
+
+            // The consumer-visible contract: both download URLs resolve.
+            for (const url of [
+              `${dl}/ts0?branch=${github.ref_name}&os=linux&arch=amd64`,
+              nativeProbeUrl,
+            ]) {
+              const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+              core.info(`${url} -> HTTP ${resp.status}`);
+              if (resp.status !== 302 && resp.status !== 200) {
+                core.setFailed(`published, but ${url} did not resolve (HTTP ${resp.status})`);
+                return;
+              }
+            }
+            core.notice(`ts0 v${version} published: ${dl}/ts0?v=${version}&os=linux&arch=amd64`);
