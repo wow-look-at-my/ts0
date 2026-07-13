@@ -250,3 +250,96 @@ jobs:
         with:
           name: html-jsx-sample
           path: samples/html-jsx/dist/index.html
+
+  # ---------------------------------------------------------------------------
+  # Prebuilt ts0.cjs for buildhost: ONE platform-neutral CommonJS file (the
+  # CLI + esbuild JS API + the TypeScript compiler inlined) that runs on
+  # stock Node >= 22 with no npm, plus the five platform-native esbuild
+  # binaries it fetches on first run. Consumers:
+  #   curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
+  #   node ts0.cjs build            # or: curl -fsSL "...?..." | node - build
+  # scripts/build-prebuilt.ts documents the packaging; prebuilt-smoke.sh is
+  # the bare-node (no npm on PATH) verification.
+
+  prebuilt:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Build ts0.cjs + esbuild natives
+        run: npm run build:prebuilt
+
+      - name: Bare-node smoke (node on PATH, no npm)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
+
+      - name: Upload prebuilt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt
+          path: build-prebuilt/out/
+          if-no-files-found: error
+
+  # Repeats the bare-node smoke on real arm64, exercising the linux/arm64
+  # esbuild native end-to-end. The darwin/windows natives ship without a CI
+  # execution job on purpose: they are upstream esbuild release binaries
+  # (registry tarballs verified against the package-lock sha512), and
+  # ts0.cjs itself is platform-neutral and fully smoked here.
+  smoke-prebuilt-linux-arm64:
+    needs: prebuilt
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # The samples' type-check resolves @types/node and preact from the
+      # repo's node_modules -- project dependencies, not toolchain pieces.
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prebuilt
+          path: build-prebuilt/out
+
+      - name: Bare-node smoke (linux/arm64)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
+
+  # The single publish path: master only, gated on both smokes, and driven
+  # entirely by the org's ready-made buildhost-publish action -- it
+  # self-serves this run's `prebuilt` artifact (hence actions: read),
+  # authenticates with a GHA OIDC token (hence id-token: write; buildhost
+  # trusts the issuer and auto-provisions projects, public because this repo
+  # is public), and maps files by its <binary>_<os>_<arch>[.exe] naming
+  # convention:
+  #   ts0_cosmo_any                      -> project ts0, ONE artifact under
+  #                                         the cosmo/any multi-platform
+  #                                         alias (one stored body, resolvable
+  #                                         under every ?os=..&arch=.. pair)
+  #   esbuild-<version>_<os>_<arch>      -> project ts0/esbuild-<version>,
+  #                                         the five natives ts0.cjs fetches
+  #                                         on first run
+  # Every payload is ~10 MB, far below the direct-upload cap. PR branches
+  # build and smoke but never publish.
+  publish:
+    if: github.ref == 'refs/heads/master'
+    needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
+        with:
+          artifact_name: prebuilt
