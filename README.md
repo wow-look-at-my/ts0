@@ -8,66 +8,13 @@ without writing a `tsconfig.json`, picking a bundler, or wiring up a test framew
 
 ## Requirements
 
-- Node.js **22 or newer** &mdash; the only requirement. With a
-    [prebuilt ts0.cjs](#prebuilt-tscjs-buildhost) you need nothing else: no npm,
-    no node_modules, no git.
+- Node.js **22 or newer** (uses `--experimental-strip-types` and the built-in test runner)
 
 ## Install
 
 ```sh
 npm install -g ts0
 ```
-
-### Prebuilt ts0.cjs (buildhost)
-
-For machines with **stock Node and nothing else** &mdash; no npm, no node_modules,
-no git &mdash; ts0 ships as a single platform-neutral JavaScript file on the org
-buildhost, with the TypeScript compiler inlined. Two ways to run it:
-
-```sh
-# Pinned + cached (recommended for build wiring, e.g. a go:generate step):
-curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
-node ts0.cjs build
-
-# Zero-file pipe form (re-downloads each run; fine on a fast/LAN link):
-curl -fsSL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" | node - build
-```
-
-`ts0.cjs` is the same bytes for every platform &mdash; buildhost addresses
-artifacts by os/arch, so the URL parameters are required, but any supported pair
-returns the identical file. Save it with a `.cjs` extension: the bundle is
-CommonJS (that is what lets the pipe form run with no flags), and a `.js` file
-would be mis-parsed as ESM if it lands inside a package that declares
-`"type": "module"`.
-
-**Version pinning.** `?branch=master` resolves to the latest build of master and
-moves on every merge; `?v=N` (e.g. `?v=1`) is an immutable release and never
-changes. **Pin `?v=N` in anything that needs reproducible output**; use
-`?branch=master` only where tracking latest is the point. To find the current N,
-read the `Location` header of a branch download (it redirects to `...&v=N&...`)
-or `GET https://pazer.build/api/v1/projects/ts0/releases`. Downloads are
-anonymous (the project is public).
-
-**The one native piece: esbuild.** Everything else is inlined, but esbuild's
-compiler is a platform-native binary. On first run, ts0.cjs downloads the
-matching binary (~11 MB, published alongside each release at
-`https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical
-to the npm registry's `@esbuild` package) into
-`TS0_CACHE_DIR` || `~/.cache/ts0/<build-id>/`, atomically and once; the inlined
-TypeScript compiler is extracted to the same cache. Later runs touch nothing.
-Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
-and windows/amd64.
-
-If the download target is unreachable, ts0 fails with a message naming the URL
-and the destination path &mdash; there is no silent fallback. For firewalled or
-air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild
-version, or place the binary at the named destination yourself.
-
-**Scope.** The file bundles the *toolchain*, not your project's dependencies: a
-project that imports npm packages &mdash; including `@types/node` for
-Node-target globals &mdash; still needs its own `node_modules` (installed
-however you like). Browser-target and dependency-free projects build with
-`ts0.cjs` alone.
 
 ## Quick start
 
