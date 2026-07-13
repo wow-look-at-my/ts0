@@ -26,9 +26,20 @@ TS0_CACHE=$(mktemp -d)
 CLEAN_ENV=(env -i PATH="$CLEAN_PATH" HOME="$HOME" TS0_CACHE_DIR="$TS0_CACHE")
 case "$(uname -s)" in
 	MINGW*|MSYS*|CYGWIN*)
-		CLEAN_ENV+=(SYSTEMROOT="${SYSTEMROOT:-}" WINDIR="${WINDIR:-}" TEMP="${TEMP:-}" TMP="${TMP:-}")
+		# Windows processes malfunction without the system vars; bash sees
+		# whatever casing the runner exported, so try both.
+		CLEAN_ENV+=(
+			SYSTEMROOT="${SYSTEMROOT:-${SystemRoot:-}}"
+			WINDIR="${WINDIR:-${windir:-}}"
+			TEMP="${TEMP:-}" TMP="${TMP:-}"
+		)
 		;;
 esac
+
+# sha256 helper: GNU coreutils has sha256sum, macOS ships shasum.
+sha() {
+	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
 
 t0() {
 	"${CLEAN_ENV[@]}" "$BIN" "$@"
@@ -119,11 +130,16 @@ echo "== samples/js (directory target + declaration emit) =="
 	! test -e dist/math/vec.test.js
 	! test -e dist/shaders.d.ts
 	test -z "$(find dist -name 'chunk-*.d.ts')"
-	# Determinism: byte-identical .d.ts across a rebuild.
-	before=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+	# Determinism: byte-identical .d.ts across a rebuild. (A while-read loop:
+	# xargs cannot invoke the sha() shell function, and the sample tree has
+	# no exotic filenames.)
+	dts_digest() {
+		find dist -name '*.d.ts' | LC_ALL=C sort | while read -r f; do sha "$f"; done | sha
+	}
+	before=$(dts_digest)
 	rm -rf dist
 	t0 build
-	after=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+	after=$(dts_digest)
 	test "$before" = "$after"
 )
 
