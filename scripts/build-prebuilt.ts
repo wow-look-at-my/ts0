@@ -9,12 +9,15 @@
 //       executes CJS with no flags, which is what keeps the pipe form
 //       flagless), and a .js file would be mis-parsed as ESM inside any
 //       consumer package declaring "type": "module".
-//   build-prebuilt/out/esbuild-<os>-<arch>[.exe]  the five platform-native
+//   build-prebuilt/out/esbuild-<ver>_<os>_<arch>[.exe]  the five platform-native
 //       esbuild binaries (the one piece that cannot be platform-neutral),
 //       taken from the npm registry tarballs and verified against the
 //       package-lock sha512 -- byte-identical to what npm installs.
-//   build-prebuilt/out/meta.json                  release metadata for CI's
-//       publish step (esbuild version, build id, native file list).
+//   build-prebuilt/out/ts0_cosmo_any               a copy of ts0.cjs named for
+//       the stock buildhost-publish action (maps to project "ts0", uploaded
+//       under the cosmo/any multi-platform alias).
+//   build-prebuilt/out/meta.json                   build metadata (esbuild
+//       version, build id, native file list); ignored by the publish action.
 //
 // At runtime ts0.cjs fetches its matching native from
 // https://dl.pazer.build/ts0/esbuild-<version>?os=..&arch=.. into the cache
@@ -36,16 +39,24 @@ interface NativeTarget {
 	arch: "amd64" | "arm64"; // buildhost arch name
 	esbuildPkg: string; // @esbuild/<name>
 	esbuildBin: string; // binary subpath inside the package
-	outName: string; // filename under build-prebuilt/out/
 }
 
 const NATIVE_TARGETS: NativeTarget[] = [
-	{ os: "linux", arch: "amd64", esbuildPkg: "@esbuild/linux-x64", esbuildBin: "bin/esbuild", outName: "esbuild-linux-amd64" },
-	{ os: "linux", arch: "arm64", esbuildPkg: "@esbuild/linux-arm64", esbuildBin: "bin/esbuild", outName: "esbuild-linux-arm64" },
-	{ os: "darwin", arch: "amd64", esbuildPkg: "@esbuild/darwin-x64", esbuildBin: "bin/esbuild", outName: "esbuild-darwin-amd64" },
-	{ os: "darwin", arch: "arm64", esbuildPkg: "@esbuild/darwin-arm64", esbuildBin: "bin/esbuild", outName: "esbuild-darwin-arm64" },
-	{ os: "windows", arch: "amd64", esbuildPkg: "@esbuild/win32-x64", esbuildBin: "esbuild.exe", outName: "esbuild-windows-amd64.exe" },
+	{ os: "linux", arch: "amd64", esbuildPkg: "@esbuild/linux-x64", esbuildBin: "bin/esbuild" },
+	{ os: "linux", arch: "arm64", esbuildPkg: "@esbuild/linux-arm64", esbuildBin: "bin/esbuild" },
+	{ os: "darwin", arch: "amd64", esbuildPkg: "@esbuild/darwin-x64", esbuildBin: "bin/esbuild" },
+	{ os: "darwin", arch: "arm64", esbuildPkg: "@esbuild/darwin-arm64", esbuildBin: "bin/esbuild" },
+	{ os: "windows", arch: "amd64", esbuildPkg: "@esbuild/win32-x64", esbuildBin: "esbuild.exe" },
 ];
+
+// nativeOutName follows the stock buildhost-publish action's artifact naming
+// convention, <binary>_<os>_<arch>[.exe]: the "binary" segment carries the
+// esbuild version, so the action publishes the natives to the buildhost
+// project ts0/esbuild-<version> -- exactly the project ts0.cjs's baked
+// fetch URL addresses.
+function nativeOutName(t: NativeTarget, esbuildVersion: string): string {
+	return `esbuild-${esbuildVersion}_${t.os}_${t.arch}${t.os === "windows" ? ".exe" : ""}`;
+}
 
 const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
 const buildDir = join(repoRoot, "build-prebuilt");
@@ -104,7 +115,7 @@ function stageNatives(esbuildVersion: string): void {
 			mkdirSync(extractDir, { recursive: true });
 			sh("tar", ["-xzf", tarPath, "-C", extractDir]);
 		}
-		const dest = join(outDir, t.outName);
+		const dest = join(outDir, nativeOutName(t, esbuildVersion));
 		copyFileSync(join(extractDir, "package", t.esbuildBin), dest);
 		chmodSync(dest, 0o755);
 		console.log(`  native ${t.os}/${t.arch} -> ${dest}`);
@@ -211,12 +222,20 @@ async function main(): Promise<void> {
 				buildId,
 				esbuildVersion,
 				tsVersion,
-				natives: NATIVE_TARGETS.map((t) => ({ os: t.os, arch: t.arch, file: t.outName })),
+				natives: NATIVE_TARGETS.map((t) => ({ os: t.os, arch: t.arch, file: nativeOutName(t, esbuildVersion) })),
 			},
 			null,
 			"\t",
 		),
 	);
+
+	// The stock buildhost-publish action discovers artifacts by the
+	// <binary>_<os>_<arch> naming convention; ts0_cosmo_any maps to project
+	// "ts0" uploaded once under buildhost's cosmo/any multi-platform alias
+	// (one stored body, downloadable under every os/arch pair). ts0.cjs
+	// stays alongside for the smoke scripts and local use; the action
+	// ignores it (no _os_arch suffix).
+	copyFileSync(outfile, join(outDir, "ts0_cosmo_any"));
 
 	const size = (readFileSync(outfile).length / (1024 * 1024)).toFixed(1);
 	console.log(`  -> ${outfile} (${size} MiB, build id ${buildId})`);
@@ -238,7 +257,7 @@ async function main(): Promise<void> {
 			env: {
 				...process.env,
 				TS0_CACHE_DIR: sanityCache,
-				ESBUILD_BINARY_PATH: join(outDir, hostNative.outName),
+				ESBUILD_BINARY_PATH: join(outDir, nativeOutName(hostNative, esbuildVersion)),
 			},
 		});
 		rmSync(sanityCache, { recursive: true, force: true });

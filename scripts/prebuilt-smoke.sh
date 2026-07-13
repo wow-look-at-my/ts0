@@ -27,8 +27,10 @@ case "$(uname -m)" in
 	aarch64|arm64) ARCH=arm64 ;;
 	*) echo "unsupported smoke arch: $(uname -m)"; exit 1 ;;
 esac
-NATIVE_FILE="esbuild-linux-$ARCH"
-[ -f "$NATIVES/$NATIVE_FILE" ] || { echo "missing native: $NATIVES/$NATIVE_FILE"; exit 1; }
+# Natives are named esbuild-<version>_<os>_<arch> (the buildhost-publish
+# action's convention); glob so this script needs no version knowledge.
+NATIVE_FILE=$(cd "$NATIVES" && ls esbuild-*_linux_"$ARCH" 2>/dev/null | head -1)
+[ -n "$NATIVE_FILE" ] || { echo "missing native esbuild-*_linux_$ARCH in $NATIVES"; exit 1; }
 
 # The stripped environment: a bin dir holding ONLY node, plus /usr/bin:/bin
 # for the shell utilities this script itself needs inside `env -i`. GitHub

@@ -455,17 +455,23 @@ How the pieces fit:
     repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
     macOS/windows natives ship without a CI execution job on purpose: they
     are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
-    is platform-neutral. The `publish` job (master only) mints a GHA OIDC
-    token (`core.getIDToken("https://pazer.build")`; buildhost trusts the
-    issuer and auto-provisions projects, public because the repo is public)
-    and REST-publishes: the five natives to project `ts0/esbuild-<version>`
-    (skipped when that version is already published &mdash; natives are
-    immutable per esbuild version), then `ts0.cjs` to project `ts0` as ONE
-    artifact under `os=cosmo, arch=any` (buildhost's multi-platform alias:
-    one stored body, rows for every os/arch pair, so any `?os=..&arch=..`
-    download resolves). Natives publish FIRST so a fresh ts0.cjs never
-    points at unpublished natives. PR branches build and smoke but never
-    publish.
+    is platform-neutral. The `publish` job (master only) is the STOCK
+    `wow-look-at-my/buildhost/.github/actions/buildhost-publish@master`
+    action with `artifact_name: prebuilt` &mdash; no inline publish
+    scripting; if the action ever lacks something, fix it upstream in the
+    buildhost repo, never with a hand-rolled step here. It self-serves the
+    run artifact (needs `actions: read`), authenticates via GHA OIDC
+    (`id-token: write`; buildhost auto-provisions the projects, public
+    because this repo is public), and maps files by naming convention:
+    `ts0_cosmo_any` &rarr; project `ts0`, one artifact under the cosmo/any
+    multi-platform alias (one stored body, resolvable under every
+    `?os=..&arch=..` pair); `esbuild-<version>_<os>_<arch>[.exe]` &rarr;
+    project `ts0/esbuild-<version>`. Each master merge creates a new release
+    of BOTH projects (the natives' bytes are identical across re-publishes
+    of the same esbuild version, and ts0.cjs's version-less fetch URL always
+    resolves the latest); `scripts/build-prebuilt.ts` owns the naming, so a
+    rename there is a publish-layout change. PR branches build and smoke but
+    never publish.
 
 ## Documentation
 
