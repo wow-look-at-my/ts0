@@ -243,10 +243,7 @@ async function runTsc(
 	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
 
 	try {
-		// Quoted: tscPath/tempTsconfig may live under paths with spaces (a
-		// node_modules under a spaced directory, or the prebuilt ts0.js
-		// cache under e.g. "C:\\Users\\First Last\\.cache").
-		const output = execSync(`node "${tscPath}" --project "${tempTsconfig}"`, {
+		const output = execSync(`node ${tscPath} --project ${tempTsconfig}`, {
 			cwd: rootDir,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
