@@ -252,13 +252,16 @@ jobs:
           path: samples/html-jsx/dist/index.html
 
   # ---------------------------------------------------------------------------
-  # Prebuilt single-executable (SEA) binaries, published to buildhost so
-  # non-node consumers (e.g. webhook-runner's //go:generate) can
-  # `curl https://dl.pazer.build/ts0?...` a self-contained ts0.
-  # scripts/build-sea.ts documents the packaging; scripts/sea-smoke.sh is the
-  # clean-environment (no node on PATH) verification each smoke job runs.
+  # Prebuilt ts0.cjs for buildhost: ONE platform-neutral CommonJS file (the
+  # CLI + esbuild JS API + the TypeScript compiler inlined) that runs on
+  # stock Node >= 22 with no npm, plus the five platform-native esbuild
+  # binaries it fetches on first run. Consumers:
+  #   curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
+  #   node ts0.cjs build            # or: curl -fsSL "...?..." | node - build
+  # scripts/build-prebuilt.ts documents the packaging; prebuilt-smoke.sh is
+  # the bare-node (no npm on PATH) verification.
 
-  package:
+  prebuilt:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -271,21 +274,26 @@ jobs:
 
       - run: npm ci
 
-      - name: Build SEA binaries (all platforms)
-        run: npm run build:sea
+      - name: Build ts0.cjs + esbuild natives
+        run: npm run build:prebuilt
 
-      - name: Clean-environment smoke (linux/amd64, no node on PATH)
-        run: scripts/sea-smoke.sh build-sea/out/ts0_linux_amd64
+      - name: Bare-node smoke (node on PATH, no npm)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
 
-      - name: Upload SEA binaries
+      - name: Upload prebuilt artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sea-binaries
-          path: build-sea/out/
+          name: prebuilt
+          path: build-prebuilt/out/
           if-no-files-found: error
 
-  smoke-sea-linux-arm64:
-    needs: package
+  # Repeats the bare-node smoke on real arm64, exercising the linux/arm64
+  # esbuild native end-to-end. The darwin/windows natives ship without a CI
+  # execution job on purpose: they are upstream esbuild release binaries
+  # (registry tarballs verified against the package-lock sha512), and
+  # ts0.cjs itself is platform-neutral and fully smoked here.
+  smoke-prebuilt-linux-arm64:
+    needs: prebuilt
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -301,112 +309,29 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: sea-binaries
-          path: build-sea/out
+          name: prebuilt
+          path: build-prebuilt/out
 
-      - name: Clean-environment smoke (linux/arm64)
-        run: |
-          chmod +x build-sea/out/ts0_linux_arm64
-          scripts/sea-smoke.sh build-sea/out/ts0_linux_arm64
+      - name: Bare-node smoke (linux/arm64)
+        run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
 
-  smoke-sea-macos:
-    needs: package
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - run: npm ci
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sea-binaries
-          path: build-sea/out
-
-      # Blob injection invalidated the Apple code signature (the packaging
-      # runs on Linux). arm64 macOS refuses to execute unsigned native
-      # binaries at all, so ad-hoc re-sign both darwin artifacts with the
-      # real codesign; these signed files are what publish ships.
-      - name: Ad-hoc sign the darwin binaries
-        run: |
-          chmod +x build-sea/out/ts0_darwin_arm64 build-sea/out/ts0_darwin_amd64
-          codesign --force --sign - build-sea/out/ts0_darwin_arm64
-          codesign --force --sign - build-sea/out/ts0_darwin_amd64
-          codesign --verify --verbose build-sea/out/ts0_darwin_arm64
-          codesign --verify --verbose build-sea/out/ts0_darwin_amd64
-
-      - name: Clean-environment smoke (darwin/arm64)
-        run: scripts/sea-smoke.sh build-sea/out/ts0_darwin_arm64
-
-      # Best-effort execution gate for the Intel binary: GitHub's arm64 mac
-      # runners ship Rosetta 2. If Rosetta is ever missing this degrades to a
-      # notice (the binary still ships, built+signed by the same recipe as
-      # the executed arm64 one); when Rosetta IS present a broken binary
-      # fails the job.
-      - name: darwin/amd64 smoke under Rosetta
-        run: |
-          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-            echo "::notice::Rosetta 2 unavailable; darwin/amd64 ships signed but unexecuted"
-            exit 0
-          fi
-          dir=$(mktemp -d)
-          cd "$dir"
-          printf '%s\n' '{ "entry": "src", "target": "browser" }' > ts0.json
-          mkdir src
-          printf 'export const ok: number = 1;\n' > src/ok.ts
-          TS0_CACHE_DIR=$(mktemp -d) "$GITHUB_WORKSPACE/build-sea/out/ts0_darwin_amd64" build
-          test -f dist/ok.js
-          test -f dist/ok.d.ts
-
-      - name: Upload signed darwin binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: sea-darwin-signed
-          path: |
-            build-sea/out/ts0_darwin_arm64
-            build-sea/out/ts0_darwin_amd64
-          if-no-files-found: error
-
-  smoke-sea-windows:
-    needs: package
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - run: npm ci
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sea-binaries
-          path: build-sea/out
-
-      - name: Clean-environment smoke (windows/amd64)
-        run: |
-          chmod +x build-sea/out/ts0_windows_amd64.exe
-          scripts/sea-smoke.sh build-sea/out/ts0_windows_amd64.exe
-
-  # The single publish path: master only, gated on every smoke job so a
-  # binary that cannot actually run is never released. Auth is a GitHub
-  # Actions OIDC token (buildhost trusts the issuer directly and
-  # auto-provisions the project on first push); uploads go through the
-  # buildhost CLI, whose chunked upload sessions handle binaries larger than
-  # the edge's ~95 MiB direct-body cap. The darwin artifacts are taken from
-  # the macOS job's output so exactly the signed, smoke-tested bytes ship.
+  # The single publish path: master only, gated on both smokes. Auth is a
+  # GitHub Actions OIDC token (buildhost trusts the issuer directly and
+  # auto-provisions projects on first push; public because this repo is
+  # public). Two buildhost projects:
+  #   ts0/esbuild-<version>  the five natives -- immutable per esbuild
+  #                          version, published only when that version's
+  #                          project has nothing downloadable yet;
+  #   ts0                    ts0.cjs, one release per master merge, uploaded
+  #                          ONCE under os=cosmo/arch=any (buildhost's
+  #                          multi-platform alias: one stored body, rows for
+  #                          every os/arch pair, so any ?os=..&arch=..
+  #                          download resolves).
+  # Natives publish first so a fresh ts0.cjs never points at unpublished
+  # natives. Every payload is far below the ~95 MiB direct-upload cap.
   publish:
     if: github.ref == 'refs/heads/master'
-    needs: [test, package, smoke-sea-linux-arm64, smoke-sea-macos, smoke-sea-windows]
+    needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -414,75 +339,119 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: sea-binaries
-          path: sea
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sea-darwin-signed
-          path: sea-darwin
+          name: prebuilt
+          path: prebuilt
 
       - name: Publish to buildhost
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
             const server = "https://pazer.build";
-            const project = "ts0";
+            const dl = "https://dl.pazer.build";
             const token = await core.getIDToken(server);
             if (!token) {
               core.setFailed("failed to mint an OIDC token for buildhost");
               return;
             }
 
-            const cli = path.join(env.RUNNER_TEMP ?? os.tmpdir(), "buildhost");
-            await $`curl -fSL --retry 3 -o ${cli} https://dl.pazer.build/buildhost?os=linux&arch=amd64`;
-            await $`chmod +x ${cli}`;
+            const meta = JSON.parse(fs.readFileSync("prebuilt/meta.json", "utf-8")) as {
+              esbuildVersion: string;
+              buildId: string;
+              natives: { os: string; arch: string; file: string }[];
+            };
+            const nativesProject = `ts0/esbuild-${meta.esbuildVersion}`;
 
-            const files = [
-              { os: "linux", arch: "amd64", file: "sea/ts0_linux_amd64", filename: "ts0" },
-              { os: "linux", arch: "arm64", file: "sea/ts0_linux_arm64", filename: "ts0" },
-              { os: "darwin", arch: "amd64", file: "sea-darwin/ts0_darwin_amd64", filename: "ts0" },
-              { os: "darwin", arch: "arm64", file: "sea-darwin/ts0_darwin_arm64", filename: "ts0" },
-              { os: "windows", arch: "amd64", file: "sea/ts0_windows_amd64.exe", filename: "ts0.exe" },
-            ];
-            for (const f of files) {
-              if (!fs.existsSync(f.file)) {
-                core.setFailed(`missing artifact: ${f.file}`);
+            // Small retry for transient edge errors during buildhost deploys
+            // (5xx / connection failures / empty-body 404s from the proxy; a
+            // real app error always carries a JSON body).
+            const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            const api = async (method: string, urlPath: string, body?: Buffer | string, headers: Record<string, string> = {}) => {
+              const h: Record<string, string> = { Authorization: `Bearer ${token}`, ...headers };
+              if (typeof body === "string") h["Content-Type"] = "application/json";
+              else if (body) h["Content-Type"] = "application/octet-stream";
+              for (let attempt = 1; ; attempt++) {
+                try {
+                  const resp = await fetch(`${server}${urlPath}`, { method, headers: h, body });
+                  const text = await resp.text();
+                  if (attempt >= 3 || !(resp.status >= 500 || (resp.status === 404 && text.trim() === ""))) {
+                    return { status: resp.status, text };
+                  }
+                  core.warning(`${method} ${urlPath} -> HTTP ${resp.status} (transient, attempt ${attempt}/3)`);
+                } catch (err) {
+                  if (attempt >= 3) return { status: 0, text: String(err) };
+                  core.warning(`${method} ${urlPath} -> ${String(err)} (attempt ${attempt}/3)`);
+                }
+                await sleep(1000 * 2 ** (attempt - 1));
+              }
+            };
+
+            const releaseBody = JSON.stringify({ git_branch: github.ref_name, git_commit: github.sha });
+
+            const publishRelease = async (
+              project: string,
+              artifacts: { os: string; arch: string; file: string; filename: string }[],
+            ): Promise<string> => {
+              const created = await api("POST", `/api/v1/projects/${project}/releases`, releaseBody);
+              if (created.status !== 201) {
+                throw new Error(`create release for ${project} failed (${created.status}): ${created.text}`);
+              }
+              const version = (JSON.parse(created.text) as { version: string }).version;
+              for (const a of artifacts) {
+                const bytes = fs.readFileSync(a.file);
+                const put = await api(
+                  "PUT",
+                  `/api/v1/projects/${project}/releases/${version}/artifacts/${a.os}/${a.arch}?kind=binary`,
+                  bytes,
+                  { "X-Artifact-Filename": a.filename },
+                );
+                if (put.status !== 201) {
+                  throw new Error(`upload ${project} ${a.os}/${a.arch} failed (${put.status}): ${put.text}`);
+                }
+                core.info(`uploaded ${project}/${version} ${a.os}/${a.arch} (${bytes.length} bytes)`);
+              }
+              const pub = await api("POST", `/api/v1/projects/${project}/releases/${version}/publish`);
+              if (pub.status !== 200) {
+                throw new Error(`publish ${project}/${version} failed (${pub.status}): ${pub.text}`);
+              }
+              core.info(`published ${project}/${version}`);
+              return version;
+            };
+
+            // 1) The natives, once per esbuild version: skip when that
+            // version's project already resolves a download (immutable).
+            const nativeProbeUrl = `${dl}/${nativesProject}?os=linux&arch=amd64`;
+            const probe = await fetch(nativeProbeUrl, { method: "HEAD", redirect: "manual" });
+            if (probe.status === 200 || probe.status === 302) {
+              core.info(`${nativesProject} already published (probe HTTP ${probe.status}); skipping natives`);
+            } else {
+              core.info(`probe ${nativeProbeUrl} -> HTTP ${probe.status}; publishing natives`);
+              await publishRelease(
+                nativesProject,
+                meta.natives.map((n) => ({
+                  os: n.os,
+                  arch: n.arch,
+                  file: `prebuilt/${n.file}`,
+                  filename: n.os === "windows" ? "esbuild.exe" : "esbuild",
+                })),
+              );
+            }
+
+            // 2) ts0.cjs: one platform-neutral artifact per release, stored
+            // once and addressable under every os/arch pair.
+            const version = await publishRelease("ts0", [
+              { os: "cosmo", arch: "any", file: "prebuilt/ts0.cjs", filename: "ts0.cjs" },
+            ]);
+
+            // The consumer-visible contract: both download URLs resolve.
+            for (const url of [
+              `${dl}/ts0?branch=${github.ref_name}&os=linux&arch=amd64`,
+              nativeProbeUrl,
+            ]) {
+              const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
+              core.info(`${url} -> HTTP ${resp.status}`);
+              if (resp.status !== 302 && resp.status !== 200) {
+                core.setFailed(`published, but ${url} did not resolve (HTTP ${resp.status})`);
                 return;
               }
             }
-
-            // One release, five artifacts: the CLI's manifest mode creates
-            // the release (git_branch makes ?branch=master resolve), uploads
-            // each artifact (chunked automatically when needed), then
-            // publishes.
-            const lines = [
-              `server = ${JSON.stringify(server)}`,
-              `token = ${JSON.stringify(token)}`,
-              `project = ${JSON.stringify(project)}`,
-              `git_branch = ${JSON.stringify(github.ref_name)}`,
-              `git_commit = ${JSON.stringify(github.sha)}`,
-            ];
-            for (const f of files) {
-              lines.push(
-                "",
-                "[[artifact]]",
-                `os = ${JSON.stringify(f.os)}`,
-                `arch = ${JSON.stringify(f.arch)}`,
-                'kind = "binary"',
-                `path = ${JSON.stringify(path.resolve(f.file))}`,
-                `filename = ${JSON.stringify(f.filename)}`,
-              );
-            }
-            const manifest = path.join(env.RUNNER_TEMP ?? os.tmpdir(), "buildhost-manifest.toml");
-            fs.writeFileSync(manifest, lines.join("\n") + "\n", { mode: 0o600 });
-            await $`${cli} publish --manifest ${manifest}`;
-
-            // The consumer-visible contract: the branch-latest download URL
-            // resolves (302 to the static endpoint) as soon as publish runs.
-            const url = `https://dl.pazer.build/${project}?branch=${github.ref_name}&os=linux&arch=amd64`;
-            const resp = await fetch(url, { method: "HEAD", redirect: "manual" });
-            core.info(`${url} -> HTTP ${resp.status}`);
-            if (resp.status !== 302 && resp.status !== 200) {
-              core.setFailed(`published, but the branch download URL did not resolve (HTTP ${resp.status})`);
-            }
+            core.notice(`ts0 v${version} published: ${dl}/ts0?v=${version}&os=linux&arch=amd64`);

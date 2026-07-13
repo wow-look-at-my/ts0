@@ -8,9 +8,9 @@ without writing a `tsconfig.json`, picking a bundler, or wiring up a test framew
 
 ## Requirements
 
-- Node.js **22 or newer** (uses `--experimental-strip-types` and the built-in test runner)
-- &hellip;or **no Node at all** when using a [prebuilt binary](#prebuilt-binaries-buildhost),
-    which embeds the runtime.
+- Node.js **22 or newer** &mdash; the only requirement. With a
+    [prebuilt ts0.cjs](#prebuilt-tscjs-buildhost) you need nothing else: no npm,
+    no node_modules, no git.
 
 ## Install
 
@@ -18,48 +18,56 @@ without writing a `tsconfig.json`, picking a bundler, or wiring up a test framew
 npm install -g ts0
 ```
 
-### Prebuilt binaries (buildhost)
+### Prebuilt ts0.cjs (buildhost)
 
-For machines with **nothing installed** &mdash; no Node, no npm &mdash; ts0 ships as a
-fully self-contained single executable on the org buildhost. The binary embeds the
-Node 22 runtime, the bundled CLI, the TypeScript compiler, and esbuild (including its
-platform-native binary):
+For machines with **stock Node and nothing else** &mdash; no npm, no node_modules,
+no git &mdash; ts0 ships as a single platform-neutral JavaScript file on the org
+buildhost, with the TypeScript compiler inlined. Two ways to run it:
 
 ```sh
-curl -fL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" -o ts0
-chmod +x ts0
-./ts0 build
+# Pinned + cached (recommended for build wiring, e.g. a go:generate step):
+curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
+node ts0.cjs build
+
+# Zero-file pipe form (re-downloads each run; fine on a fast/LAN link):
+curl -fsSL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" | node - build
 ```
 
-| Platform | URL parameters |
-| -------- | -------------- |
-| Linux x86-64 | `os=linux&arch=amd64` |
-| Linux ARM64 | `os=linux&arch=arm64` |
-| macOS Apple Silicon | `os=darwin&arch=arm64` |
-| macOS Intel | `os=darwin&arch=amd64` |
-| Windows x86-64 | `os=windows&arch=amd64` (an `.exe`; save it as `ts0.exe`) |
+`ts0.cjs` is the same bytes for every platform &mdash; buildhost addresses
+artifacts by os/arch, so the URL parameters are required, but any supported pair
+returns the identical file. Save it with a `.cjs` extension: the bundle is
+CommonJS (that is what lets the pipe form run with no flags), and a `.js` file
+would be mis-parsed as ESM if it lands inside a package that declares
+`"type": "module"`.
 
-**Version pinning.** `?branch=master` resolves to the latest build of master and moves
-on every merge; `?v=N` (e.g. `?v=1`) is an immutable release and never changes.
-**Pin `?v=N` in anything that needs reproducible output** (a `//go:generate` step, a
-Dockerfile); use `?branch=master` only where tracking latest is the point. To find the
-current N, read the `Location` header of a branch download (it redirects to
-`...&v=N&...`) or `GET https://pazer.build/api/v1/projects/ts0/releases`. Downloads
-are anonymous (the project is public); add `&fmt=tar.gz` (or `zip`, ...) to download
-repackaged instead of raw.
+**Version pinning.** `?branch=master` resolves to the latest build of master and
+moves on every merge; `?v=N` (e.g. `?v=1`) is an immutable release and never
+changes. **Pin `?v=N` in anything that needs reproducible output**; use
+`?branch=master` only where tracking latest is the point. To find the current N,
+read the `Location` header of a branch download (it redirects to `...&v=N&...`)
+or `GET https://pazer.build/api/v1/projects/ts0/releases`. Downloads are
+anonymous (the project is public).
 
-**First-run extraction.** On first use the binary extracts its embedded toolchain
-(tsc, esbuild, the runtime template) to `~/.cache/ts0/<build-id>/` &mdash; override the
-location with `TS0_CACHE_DIR`. Later runs reuse the extraction; the build id changes
-with every release, so upgrades never collide and no cleanup is needed beyond deleting
-the directory.
+**The one native piece: esbuild.** Everything else is inlined, but esbuild's
+compiler is a platform-native binary. On first run, ts0.cjs downloads the
+matching binary (~11 MB, published alongside each release at
+`https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical
+to the npm registry's `@esbuild` package) into
+`TS0_CACHE_DIR` || `~/.cache/ts0/<build-id>/`, atomically and once; the inlined
+TypeScript compiler is extracted to the same cache. Later runs touch nothing.
+Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
+and windows/amd64.
 
-**Scope.** The binary bundles the *toolchain*, not your project's dependencies: a
-project that imports npm packages &mdash; including `@types/node` for Node-target
-globals &mdash; still needs its own `node_modules` (installed however you like).
-Browser-target and dependency-free projects build with the binary alone. The macOS
-binaries are ad-hoc code-signed; Gatekeeper treats a `curl`-downloaded binary like any
-other terminal tool.
+If the download target is unreachable, ts0 fails with a message naming the URL
+and the destination path &mdash; there is no silent fallback. For firewalled or
+air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild
+version, or place the binary at the named destination yourself.
+
+**Scope.** The file bundles the *toolchain*, not your project's dependencies: a
+project that imports npm packages &mdash; including `@types/node` for
+Node-target globals &mdash; still needs its own `node_modules` (installed
+however you like). Browser-target and dependency-free projects build with
+`ts0.cjs` alone.
 
 ## Quick start
 

@@ -8,7 +8,7 @@
 	},
 	"scripts": {
 		"build": "node --experimental-strip-types src/cli.ts build",
-		"build:sea": "node --experimental-strip-types scripts/build-sea.ts",
+		"build:prebuilt": "node --experimental-strip-types scripts/build-prebuilt.ts",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm run build"
 	},
@@ -22,7 +22,6 @@
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
-		"postject": "1.0.0-alpha.6",
 		"preact": "^10.25.4"
 	},
 	"engines": {

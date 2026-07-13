@@ -25,13 +25,13 @@ src/
         esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
         run.ts          # type-check, then build+node (or strip-types+node for --no-build)
         test.ts         # type-check, then node --test on discovered test files
-    sea/                # SEA (prebuilt single-executable) support; see "Prebuilt SEA binaries"
-        bridge.ts       # SeaBridge global: how command code re-invokes the SEA binary instead of `node` (npm build: always undefined)
-        prelude.ts      # SEA-only launcher: asset extraction, resolution globals, dispatch interception
-        main.ts         # SEA bundle entry: prelude first, then the CLI (skipped for dispatches)
+    prebuilt/           # prebuilt ts0.cjs support; see "Prebuilt ts0.cjs"
+        main.ts         # bundle entry: prepare cache + esbuild native, then load the CLI
+        runtime.ts      # cache extraction + esbuild-native fetch (no self-path dependence)
+        prebuilt-assets.d.ts # ambient decl for the generated "ts0-prebuilt-assets" virtual module
 scripts/
-    build-sea.ts        # packages the SEA binaries for buildhost (all platforms, from linux/amd64)
-    sea-smoke.sh        # clean-environment (no node on PATH) verification of a SEA binary
+    build-prebuilt.ts   # packages ts0.cjs + the five esbuild natives for buildhost
+    prebuilt-smoke.sh   # bare-node (no npm) end-to-end verification of ts0.cjs
 samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
@@ -359,13 +359,14 @@ in build-js.ts):
 
 Two consumption paths, for two kinds of consumer:
 
-- **Prebuilt binaries on buildhost (primary for non-node consumers).**
-    Machines without Node &mdash; webhook-runner's `//go:generate` step, CI
-    images, containers &mdash; download a self-contained single executable
-    from `https://dl.pazer.build/ts0?...` (see the README's "Prebuilt binaries"
-    section for URLs and pinning semantics, and "Prebuilt SEA binaries" below
-    for how it's built). Recommend `?v=N` pins to consumers that need
-    reproducible output.
+- **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
+    Machines with stock Node but no npm/node_modules/git &mdash;
+    webhook-runner's `//go:generate` step, CI images, containers &mdash;
+    download one platform-neutral JavaScript file from
+    `https://dl.pazer.build/ts0?...` and run it with `node` (or pipe it:
+    `curl ... | node - build`). See the README's "Prebuilt ts0.cjs" section
+    for URLs and pinning semantics, and "Prebuilt ts0.cjs" below for how it is
+    built. Recommend `?v=N` pins to consumers that need reproducible output.
 - **npm / git installs (for node projects).**
     `npm install github:wow-look-at-my/bundler`: `package.json` has a `prepare`
     script that runs `npm run build`; npm runs `prepare` automatically when
@@ -373,90 +374,98 @@ Two consumption paths, for two kinds of consumer:
     and `npx ts0 …` works without a separate build step. The `"files"` field is
     irrelevant for git installs but matters for `npm publish` &mdash; keep
     `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets
-    consumes ts0 this way; the SEA machinery must never change this path's
-    behavior (see the npm-path invariant below).
+    consumes ts0 this way; the prebuilt machinery must never change this
+    path's behavior (see the npm-path invariant below).
 
-## Prebuilt SEA binaries (buildhost packaging)
+## Prebuilt ts0.cjs (buildhost packaging)
 
-`scripts/build-sea.ts` packages ts0 as Node SEA (single executable
-application) binaries &mdash; official Node binary + injected blob &mdash; for
-linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, and windows/amd64, all
-cross-packaged from one linux/amd64 host (postject patches any binary format).
-CI publishes them to buildhost project `ts0` on merges to master.
+`scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral
+CommonJS file plus five small platform-native esbuild binaries. CI publishes
+them to buildhost on merges to master; consumers run
+`node ts0.cjs <cmd>` (or `curl ... | node - <cmd>`) on stock Node >= 22 with
+no npm. Node is the deliberate prerequisite &mdash; ts0 is a Node tool, and
+hosting duplicated Node runtimes per platform was rejected as waste.
 
 How the pieces fit:
 
-- **The bundle** (`src/sea/main.ts` &rarr; one CJS file): SEA mains must be
-    CommonJS, so the packaging bundles with `format: "cjs"`. Two esbuild-level
-    redirections make the existing source work unchanged inside the binary:
-    `import.meta.url` is `define`d to `globalThis.__ts0SeaImportMetaUrl`, and
-    the static `esbuild` import is rewritten (via an onResolve/onLoad plugin)
-    to `globalThis.__ts0SeaRequire("esbuild")` &mdash; SEA's injected
-    `require()` only loads builtins, so on-disk modules must go through a
-    `createRequire`.
-- **The assets**: a pruned `typescript` package (`package.json`, `bin/tsc`,
-    `lib/tsc.js`, `lib/_tsc.js`, every `lib/lib.*.d.ts` &mdash; the tsc CLI
-    chain and standard libraries; `typescript.js`, tsserver, and locales are
-    never loaded), the `esbuild` JS package (`package.json` + `lib/main.js`),
-    the target's `@esbuild/<platform>` native package (downloaded from the npm
-    registry, verified against the package-lock sha512), and
-    `src/runtime/fetch-interceptor.js`, plus a `manifest.json` naming them all.
-- **Extraction** (`src/sea/prelude.ts`): on first run the assets are extracted
-    to `$TS0_CACHE_DIR`-or-`~/.cache/ts0/<build-id>/` (atomic temp+rename;
-    concurrent racers use the winner's tree), laid out like an installed ts0:
-    `dist/ts0` (the resolution anchor), `src/runtime/fetch-interceptor.js`,
-    `node_modules/{typescript,esbuild,@esbuild/<plat>}`. Pointing
-    `__ts0SeaImportMetaUrl` at `<cache>/dist/ts0` makes build.ts's
-    `createRequire(import.meta.url).resolve("typescript/bin/tsc")` and
-    build-html.ts's `../src/runtime/fetch-interceptor.js` candidate resolve
-    with zero source changes, and esbuild's own
-    `require.resolve("@esbuild/<plat>/bin/esbuild")` finds its native binary
-    naturally (no `ESBUILD_BINARY_PATH` needed). The build id hashes the
-    bundle, every asset byte, the Node version, and the target &mdash; any
-    change extracts fresh; upgrades never collide.
-- **Dispatch** (`src/sea/bridge.ts` + prelude): there is no `node` on PATH
-    inside the SEA, so the three node-spawn sites re-invoke the binary itself
-    (`process.execPath`) with `--ts0-sea-dispatch=<mode>` as argv[2], which the
-    prelude intercepts before the CLI loads: `tsc` (createRequire the extracted
-    `typescript/bin/tsc` in-process &mdash; it reads process.argv and exits),
-    `run` (dynamic `import()` of the file; Node 22.18+ strips types for
-    on-disk `.ts` by default, covering `run --no-build`), and `test`
-    (`node:test`'s `run()` API with `isolation: "none"` &mdash; in-process, no
-    child node, spec reporter to stdout).
-- **npm-path invariant**: the bridge global is only ever set by the prelude,
-    which only the SEA bundle contains. `seaBridge()` returns undefined in the
-    npm build and every spawn site keeps its exact plain-`node` behavior.
-    Never make shared command code import `node:sea` or otherwise detect SEA
-    itself &mdash; the global IS the detection, and it keeps the npm path
-    byte-for-byte identical in behavior.
-- **What must stay in sync when deps bump**: the typescript prune list in
-    `stageCommon` (the `bin/tsc` &rarr; `lib/tsc.js` &rarr; `lib/_tsc.js`
-    chain is a TypeScript-5.x layout &mdash; if a TS upgrade renames these,
-    the script throws at package time); the esbuild external + staged
-    `lib/main.js` (esbuild's binary lookup and its `ESBUILD_BINARY_PATH`
-    escape hatch were verified against 0.28.x); `NODE_VERSION` in
-    build-sea.ts (bump deliberately &mdash; the blob is generated with the
-    pinned-version linux-x64 Node so blob and runtime can't drift, and the
-    SHASUMS256 verification pins the archives). `postject` is an exact-pinned
-    devDependency (the official SEA injection tool).
-- **CI/publish** (`.github/workflows/ci.yml`): the `package` job builds all
-    five binaries and runs `scripts/sea-smoke.sh` (a full CI-equivalent pass
-    &mdash; init flow, type-error gate, all samples &mdash; in an `env -i`
-    environment whose PATH has no node) against linux/amd64;
-    `smoke-sea-linux-arm64` (ubuntu-24.04-arm), `smoke-sea-macos`
-    (darwin/arm64 full smoke + darwin/amd64 under Rosetta), and
-    `smoke-sea-windows` (git-bash) repeat it per platform. macOS binaries are
-    ad-hoc re-signed with real `codesign` in the macOS job (injection on
-    linux invalidates Apple signatures; arm64 macOS refuses unsigned
-    binaries), and publish ships exactly those signed bytes. The `publish`
-    job (master only, needs every smoke) mints a GHA OIDC token
-    (`core.getIDToken("https://pazer.build")` &mdash; buildhost trusts the
-    issuer and auto-provisions the project, public because the repo is
-    public), downloads the buildhost CLI, and publishes ONE release with all
-    five artifacts via `buildhost publish --manifest` &mdash; the CLI's
-    chunked upload sessions carry the ~140 MB binaries past the edge's
-    ~95 MiB direct-body cap, and `git_branch` makes `?branch=master`
-    resolve. PR branches build and smoke but never publish.
+- **The bundle** (`src/prebuilt/main.ts` &rarr; `ts0.cjs`): the CLI, the
+    esbuild JS API, and the ENTIRE TypeScript compiler (pure JS) in one file.
+    The tsc CLI chain (`bin/tsc`, `lib/tsc.js`, `lib/_tsc.js`) and every
+    `lib/lib.*.d.ts` standard library are embedded as strings via the
+    generated `ts0-prebuilt-assets` virtual module (an esbuild plugin injects
+    it at package time; `src/prebuilt/prebuilt-assets.d.ts` is the ambient
+    declaration that keeps the repo type-check happy without it).
+- **Format is CommonJS, extension is .cjs, and both are load-bearing.**
+    `node -` executes stdin as CJS with no flags, which is what keeps the
+    pipe form (`curl ... | node - build`) flagless; and a `.js` file would be
+    mis-parsed as ESM inside any consumer package declaring
+    `"type": "module"` (including this repo). Do not rename the artifact to
+    `.js` or switch the bundle to ESM without solving both.
+- **Stdin-runnable invariant: nothing may depend on the bundle's own path.**
+    Under `node -`, `__filename` is `[stdin]` and there is no
+    `import.meta.url`. The packaging `define`s `import.meta.url` to
+    `globalThis.__ts0PrebuiltImportMetaUrl`, which `runtime.ts` points at
+    `<cache>/<build-id>/dist/ts0` &mdash; so build.ts's
+    `createRequire(...).resolve("typescript/bin/tsc")` finds the EXTRACTED
+    compiler under `<cache>/node_modules/typescript`, and build-html.ts's
+    `../src/runtime/fetch-interceptor.js` candidate finds the extracted
+    template, with zero source changes. If you add a new
+    `__filename`/`__dirname`/`import.meta.url` use to shared code, it must
+    resolve via that anchor (or the cache), never via the bundle's location.
+    (The bundled esbuild lib references `__filename` only on error paths that
+    `ESBUILD_BINARY_PATH` short-circuits.)
+- **Extraction** (`src/prebuilt/runtime.ts`): first run writes the embedded
+    files to `$TS0_CACHE_DIR`-or-`~/.cache/ts0/<build-id>/` (atomic
+    temp+rename; concurrent racers use the winner's tree). The build id is a
+    hash of the final bundle + dependency versions (placeholder-substituted
+    after bundling), so any change extracts fresh and upgrades never collide.
+    tsc then runs exactly as in the npm build: `node <extracted tsc>
+    --project ...` &mdash; `node` is on PATH by prerequisite, so `ts0 run` /
+    `ts0 test` need no changes at all.
+- **The one native piece: esbuild.** `ensureEsbuildBinary` fetches the
+    platform's native binary (~11 MB) from
+    `https://dl.pazer.build/ts0/esbuild-<version>?os=..&arch=..` into the
+    cache (atomic, once) and exports `ESBUILD_BINARY_PATH` BEFORE the CLI
+    (and therefore the bundled esbuild module, which snapshots that env var
+    at load time) is imported &mdash; keep that ordering. A set-and-existing
+    `ESBUILD_BINARY_PATH` is respected as a user override; `TS0_ESBUILD_URL`
+    overrides the fetch URL (mirrors/tests). Fetch failures name the URL and
+    destination &mdash; never a silent fallback. The natives come from the
+    npm registry tarballs, verified against the package-lock sha512, so they
+    are byte-identical to what npm installs; there is no esbuild-wasm
+    fallback (deliberate &mdash; not worth the weight).
+- **npm-path invariant**: the prebuilt machinery lives entirely in
+    `src/prebuilt/` + the packaging script. The only shared-source change is
+    quoting in `runTsc`'s exec string (spaced paths). The npm/git-install
+    path must never notice the prebuilt exists.
+- **What must stay in sync when deps bump**: the typescript embed list in
+    `embeddedFiles` (the `bin/tsc` &rarr; `lib/tsc.js` &rarr; `lib/_tsc.js`
+    chain is a TypeScript-5.x layout &mdash; the script throws at package
+    time if renamed); the esbuild version is read from the lockfile and baked
+    into both the native-fetch URL and the buildhost project name
+    (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
+    new natives project on the next master merge.
+- **CI/publish** (`.github/workflows/ci.yml`): the `prebuilt` job builds
+    everything and runs `scripts/prebuilt-smoke.sh` &mdash; a bare-node smoke
+    (`env -i`, PATH holds ONLY node; npm/npx asserted unreachable) that
+    exercises the real fetch path against a local HTTP server, the
+    fetch-failure message, the PIPE form (`cat ts0.cjs | node - build`), the
+    init flow, the type-error gate, every sample assertion incl. declaration
+    determinism, and offline cache reuse; `smoke-prebuilt-linux-arm64`
+    repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
+    macOS/windows natives ship without a CI execution job on purpose: they
+    are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
+    is platform-neutral. The `publish` job (master only) mints a GHA OIDC
+    token (`core.getIDToken("https://pazer.build")`; buildhost trusts the
+    issuer and auto-provisions projects, public because the repo is public)
+    and REST-publishes: the five natives to project `ts0/esbuild-<version>`
+    (skipped when that version is already published &mdash; natives are
+    immutable per esbuild version), then `ts0.cjs` to project `ts0` as ONE
+    artifact under `os=cosmo, arch=any` (buildhost's multi-platform alias:
+    one stored body, rows for every os/arch pair, so any `?os=..&arch=..`
+    download resolves). Natives publish FIRST so a fresh ts0.cjs never
+    points at unpublished natives. PR branches build and smoke but never
+    publish.
 
 ## Documentation
 

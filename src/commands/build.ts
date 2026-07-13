@@ -2,7 +2,6 @@ import * as esbuild from "esbuild";
 import { join, relative, resolve } from "node:path";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
-import { seaBridge } from "../sea/bridge.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
@@ -231,7 +230,7 @@ async function runTsc(
 	tempName: string,
 	tsconfigContent: unknown,
 ): Promise<{ success: boolean; output: string }> {
-	const { execSync, execFileSync } = await import("node:child_process");
+	const { execSync } = await import("node:child_process");
 	const { createRequire } = await import("node:module");
 
 	// Find tsc from ts0's dependencies, not the project's
@@ -244,22 +243,14 @@ async function runTsc(
 	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
 
 	try {
-		// Inside the prebuilt SEA binary there is no `node` on PATH; the
-		// bridge re-invokes the binary itself in tsc-dispatch mode (see
-		// src/sea/bridge.ts). The npm build has no bridge and keeps the
-		// plain-node invocation unchanged.
-		const bridge = seaBridge();
-		const output = bridge
-			? execFileSync(bridge.execPath, bridge.tscArgs(tscPath, tempTsconfig), {
-					cwd: rootDir,
-					encoding: "utf-8",
-					stdio: ["pipe", "pipe", "pipe"],
-				})
-			: execSync(`node ${tscPath} --project ${tempTsconfig}`, {
-					cwd: rootDir,
-					encoding: "utf-8",
-					stdio: ["pipe", "pipe", "pipe"],
-				});
+		// Quoted: tscPath/tempTsconfig may live under paths with spaces (a
+		// node_modules under a spaced directory, or the prebuilt ts0.js
+		// cache under e.g. "C:\\Users\\First Last\\.cache").
+		const output = execSync(`node "${tscPath}" --project "${tempTsconfig}"`, {
+			cwd: rootDir,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 		return { success: true, output };
 	} catch (err) {
 		const error = err as { stdout?: string; stderr?: string };
