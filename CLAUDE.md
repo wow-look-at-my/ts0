@@ -507,7 +507,9 @@ How the pieces fit:
     action with `artifact_name: prebuilt` &mdash; no inline publish
     scripting; if the action ever lacks something, fix it upstream in the
     buildhost repo, never with a hand-rolled step here. It self-serves the
-    run artifact (needs `actions: read`), authenticates via GHA OIDC
+    run artifact and runs a pre-publish guard that scans the run's jobs and
+    the head commit's check runs (hence `actions: read` + `checks: read`
+    &mdash; the guard fails closed without both), authenticates via GHA OIDC
     (`id-token: write`; buildhost auto-provisions the projects, public
     because this repo is public), and maps files by naming convention:
     `ts0_cosmo_any` &rarr; project `ts0`, one artifact under the cosmo/any
@@ -519,6 +521,13 @@ How the pieces fit:
     resolves the latest); `scripts/build-prebuilt.ts` owns the naming, so a
     rename there is a publish-layout change. PR branches build and smoke but
     never publish.
+- **Org merge gate / job naming**: merging into master needs a green
+    `all-builds` commit status on the PR head SHA, posted automatically by
+    an org app (required-builds-manager) that aggregates every build on the
+    SHA &mdash; no special CI job naming is needed for the gate. Never name
+    a job `all-builds`: the buildhost publish actions fail any run whose
+    SHA carries a job by that name (the error says to rename); use a
+    neutral name like `aggregate` if a fan-in job is ever wanted.
 
 ## Documentation
 
