@@ -1,6 +1,6 @@
 import * as esbuild from "esbuild";
-import { join, relative, resolve } from "node:path";
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { basename, join, relative, resolve } from "node:path";
+import { readdirSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
@@ -19,9 +19,13 @@ export interface BuildOverrides {
 	outdir?: string;
 }
 
-export async function build(options?: { watch?: boolean; overrides?: BuildOverrides }): Promise<BuildResult> {
+export async function build(options?: {
+	watch?: boolean;
+	overrides?: BuildOverrides;
+	configPath?: string;
+}): Promise<BuildResult> {
 	const startTime = performance.now();
-	const { config: loaded, rootDir } = loadConfig();
+	const { config: loaded, rootDir } = loadConfig(options?.configPath);
 	const config = applyOverrides(loaded, options?.overrides);
 	const watch = !!options?.watch;
 
@@ -69,11 +73,13 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 	const esbuildConfig: esbuild.BuildOptions = {
 		entryPoints: [join(rootDir, config.entry)],
 		...baseEsbuildOptions(config),
-		// Single file output with shebang, or directory output
+		// Single file output, or directory output. The `#!/usr/bin/env node`
+		// shebang is a Node-target convenience (ship a CLI as one executable
+		// file); a browser bundle must never start with one.
 		...(config.outfile
 			? {
 					outfile: join(rootDir, config.outfile),
-					banner: { js: "#!/usr/bin/env node" },
+					...(config.target === "node" && { banner: { js: "#!/usr/bin/env node" } }),
 				}
 			: {
 					outdir: join(rootDir, config.outdir || "dist"),
@@ -88,6 +94,18 @@ export async function build(options?: { watch?: boolean; overrides?: BuildOverri
 	// Prepended so it runs before any user-supplied plugin from the escape hatch.
 	if (watch) {
 		esbuildConfig.plugins = [typecheckPlugin(config, rootDir), ...(esbuildConfig.plugins ?? [])];
+	}
+
+	// preserveHeader re-prepends the entry's leading comment block to the
+	// written bundle (esbuild strips comments). An onEnd plugin covers the
+	// one-shot build and every watch rebuild alike -- each rebuild rewrites
+	// the output file, so each rebuild gets a fresh prepend, never a double.
+	if (config.preserveHeader) {
+		const entryPath = join(rootDir, config.entry);
+		const outPath = esbuildConfig.outfile
+			? String(esbuildConfig.outfile)
+			: join(String(esbuildConfig.outdir), basename(config.entry).replace(/\.(ts|tsx|mts|cts|jsx)$/i, ".js"));
+		esbuildConfig.plugins = [...(esbuildConfig.plugins ?? []), preserveHeaderPlugin(entryPath, outPath)];
 	}
 
 	try {
@@ -191,20 +209,24 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 //   addEventListener and friends resolve. Node code gets the ESNext lib only;
 //   its globals come from @types/node. Without this, every HTML/browser
 //   project would fail type-checking on "Cannot find name 'document'".
-// - The js (library) target is bundled by esbuild, so it gets bundler module
-//   resolution: it matches esbuild's resolver, permits extensionless relative
-//   imports and loader-backed imports (e.g. `import src from "./shader.wgsl"`),
-//   and doesn't force `.ts` extensions on library source. The default
-//   single-entry target keeps NodeNext.
+// - Bundler-consumed code gets bundler module resolution: the js (library)
+//   target AND any browser-target/HTML entry are compiled by esbuild, so the
+//   gate checks with the resolution the bundler actually uses -- permitting
+//   extensionless relative imports and loader-backed imports (e.g.
+//   `import src from "./shader.wgsl"`) instead of forcing `.ts` extensions
+//   on code Node never resolves. Only a Node-target single-entry app -- the
+//   one case where the OUTPUT is resolved by Node's own module system --
+//   keeps NodeNext.
 // - When JSX is enabled, the matching tsc options are threaded so .tsx files
 //   are handled (esbuild's jsx setting alone does not type-check JSX).
 function generatedCompilerOptions(config: Ts0Config, rootDir: string): Record<string, unknown> {
 	const isBrowser = config.target === "browser" || isHtmlEntry(config.entry);
 	const jsTarget = isJsTarget(config.entry, rootDir);
+	const bundlerResolved = jsTarget || isBrowser;
 	const compilerOptions: Record<string, unknown> = {
 		target: "ESNext",
-		module: jsTarget ? "ESNext" : "NodeNext",
-		moduleResolution: jsTarget ? "Bundler" : "NodeNext",
+		module: bundlerResolved ? "ESNext" : "NodeNext",
+		moduleResolution: bundlerResolved ? "Bundler" : "NodeNext",
 		lib: isBrowser ? ["ESNext", "DOM", "DOM.Iterable"] : ["ESNext"],
 		strict: config.strict,
 		skipLibCheck: true,
@@ -273,8 +295,12 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	// A nested project (its own ts0.json) may use different settings -- e.g.
 	// JSX -- that would make the parent's type-check fail on it; it is
 	// type-checked on its own when built directly. The output dir is excluded
-	// so emitted artifacts aren't re-checked.
-	const excludeDirs = [config.outdir, ...nestedProjects].filter((d): d is string => !!d);
+	// so emitted artifacts aren't re-checked, and config.exclude adds
+	// directories that type-check under their own separate tsconfig (a test
+	// tree with its own types, an experiment dir, ...).
+	const excludeDirs = [config.outdir, ...(config.exclude ?? []), ...nestedProjects].filter(
+		(d): d is string => !!d,
+	);
 
 	// Nothing to check: a project with no TypeScript sources at all (e.g. a
 	// plain-JS HTML entry). tsc would abort with TS18003 "No inputs were
@@ -309,6 +335,7 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 // requirement, so they may live anywhere in the project.
 function collectAmbientDeclarations(rootDir: string, config: Ts0Config): string[] {
 	const outDirAbs = resolve(rootDir, config.outdir || "dist");
+	const excludedAbs = new Set((config.exclude ?? []).map((d) => resolve(rootDir, d)));
 	const found: string[] = [];
 	const walk = (dir: string): void => {
 		for (const name of readdirSync(dir)) {
@@ -316,6 +343,7 @@ function collectAmbientDeclarations(rootDir: string, config: Ts0Config): string[
 			const p = join(dir, name);
 			if (statSync(p).isDirectory()) {
 				if (resolve(p) === outDirAbs) continue;
+				if (excludedAbs.has(resolve(p))) continue; // config.exclude
 				if (existsSync(join(p, "ts0.json"))) continue; // nested project
 				walk(p);
 				continue;
@@ -379,6 +407,57 @@ export async function emitDeclarations(
 	};
 
 	return runTsc(rootDir, ".ts0-tsconfig-emit.json", tsconfigContent);
+}
+
+// leadingCommentBlock returns the entry file's leading comment block,
+// byte-exact: the maximal run of consecutive lines starting with `//` from
+// byte 0 (each including its terminating newline), or a single `/* ... */`
+// block starting at byte 0 (through the closing `*/` plus its trailing
+// newline, if present). Returns "" when the file doesn't start with a
+// comment. Byte-exactness is the point -- a userscript ==UserScript== header
+// is parsed verbatim by the script manager, so nothing may be reflowed.
+export function leadingCommentBlock(source: string): string {
+	if (source.startsWith("//")) {
+		let end = 0;
+		while (source.startsWith("//", end)) {
+			const nl = source.indexOf("\n", end);
+			if (nl === -1) return source; // comment-only file without trailing newline
+			end = nl + 1;
+		}
+		return source.slice(0, end);
+	}
+	if (source.startsWith("/*")) {
+		const close = source.indexOf("*/");
+		if (close === -1) return "";
+		let end = close + 2;
+		if (source.startsWith("\r\n", end)) end += 2;
+		else if (source.startsWith("\n", end)) end += 1;
+		return source.slice(0, end);
+	}
+	return "";
+}
+
+// preserveHeaderPlugin re-prepends the entry's leading comment block to the
+// written bundle after every successful build. esbuild drops comments while
+// bundling, but some headers are semantically load-bearing artifacts of the
+// OUTPUT file -- a userscript's ==UserScript== metadata block, a mandated
+// license banner -- so they must survive byte-exactly at the top. The header
+// goes above the bundle's own first line; a leading `"use strict";` in the
+// bundle stays an effective directive (comments never break the directive
+// prologue).
+function preserveHeaderPlugin(entryPath: string, outPath: string): esbuild.Plugin {
+	return {
+		name: "ts0-preserve-header",
+		setup(pluginBuild) {
+			pluginBuild.onEnd((result) => {
+				if (result.errors.length > 0) return;
+				const header = leadingCommentBlock(readFileSync(entryPath, "utf-8"));
+				if (!header) return;
+				const bundle = readFileSync(outPath, "utf-8");
+				writeFileSync(outPath, header.endsWith("\n") ? header + bundle : header + "\n" + bundle);
+			});
+		},
+	};
 }
 
 // typecheckPlugin runs the type-check at the start of every esbuild build,
