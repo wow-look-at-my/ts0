@@ -5,3 +5,5 @@ dist/
 bin/
 obj/
 .packages/
+.ts0-tsconfig-emit.json
+build-prebuilt/

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>ts0 HTML sample</title>
+		<link rel="stylesheet" href="./src/styles.css" />
+	</head>
+	<body>
+		<main>
+			<h1 id="greeting">Hello</h1>
+			<button id="bump" type="button">Bump</button>
+			<p>Count: <span id="count">0</span></p>
+			<p>Shader head: <code id="shader">loading…</code></p>
+			<p id="stamp"></p>
+		</main>
+		<script type="module" src="./src/main.ts"></script>
+		<!-- Exercise inline-module bundling: imports a local .ts file and
+		     resolves it via esbuild stdin's resolveDir. -->
+		<script type="module">
+			import { greeting } from "./src/greet.ts";
+			const stamp = document.getElementById("stamp");
+			if (stamp) stamp.textContent = greeting("inline");
+		</script>
+	</body>
+</html>
