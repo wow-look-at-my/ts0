@@ -11,6 +11,9 @@ export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 		bundle: true,
 		platform: config.target === "node" ? "node" : "browser",
 		format: config.format,
+		// The IIFE's exports-object global (only meaningful for format
+		// "iife"; esbuild ignores it otherwise).
+		...(config.globalName && { globalName: config.globalName }),
 		minify: config.minify,
 		sourcemap: config.sourcemap,
 		target: "esnext",

@@ -1,0 +1,5 @@
+{
+	"entry": "index.html",
+	"outfile": "dist/index.html",
+	"sourcemap": false
+}

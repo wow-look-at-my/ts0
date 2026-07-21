@@ -37,6 +37,8 @@ samples/
     html/               # HTML-entry smoke-test sample exercised by CI
     html-jsx/           # HTML+JSX (Preact, automatic runtime) regression sample
     js/                 # directory-entry "js" library target sample (CI)
+    userscript/         # iife + globalName + preserveHeader sample (CI)
+    bookmarklet/        # HTML entry with a javascript: bookmarklet href (CI)
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -91,7 +93,21 @@ CLI end-to-end by:
     not copied, no `.d.ts.map`, and byte-identical `.d.ts` across a rebuild
     (determinism). A follow-up step proves `"declarations": false` opts out
     (`.js` emitted, zero `.d.ts`).
-8. The "Type-check gate blocks broken output" step: a project with a deliberate
+8. Running `ts0 build` against `samples/userscript` and asserting the
+    userscript-bundling features: the `==UserScript==` header re-prepended
+    byte-exactly at the top (exactly once, stable across a rebuild &mdash;
+    `preserveHeader`), the IIFE assigned to the configured `globalName`, no
+    module statements and no shebang in the browser output, and the
+    extensionless `./lib/greet` import both type-checked (browser targets
+    gate-check with bundler resolution) and inlined. Follow-up steps prove
+    `--config <path>` builds the sample from the repo root and that the
+    `exclude` config skips a broken directory the gate would otherwise fail on.
+9. Running `ts0 build` against `samples/bookmarklet` and asserting the
+    `javascript:<file>` href was replaced by a percent-encoded minified
+    bundle that decodes back to the program (lib import inlined), while a
+    real `javascript:void(0)` href and the rest of the page stay untouched
+    and no fetch interceptor is injected.
+10. The "Type-check gate blocks broken output" step: a project with a deliberate
     type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
     `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
     nothing (no `dist/`, no test run). The error strips to valid JS and the test
@@ -214,19 +230,20 @@ up-front check would let later rebuilds/re-runs slip past:
     type-checks, then runs the tests one-shot only if the check passes. Do not
     switch it back to `node --test --watch`.
 
-Module resolution in the generated tsconfig depends on the target: the default
-single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
-the **js library target** (directory entry) uses `Bundler` resolution to match
-esbuild &mdash; so a library can use extensionless relative imports and
-loader-backed imports (`import x from "./y.wgsl"`) without `.ts` extensions. HTML
-entries skip type-checking entirely.
+Module resolution in the generated tsconfig follows who consumes the code: a
+**Node-target single-entry** app &mdash; the one case where the output is
+resolved by Node's own module system &mdash; uses `NodeNext` (`.ts` extensions
+required), while everything esbuild compiles &mdash; the **js library target**,
+any **browser-target** entry, and **HTML** entries &mdash; uses `Bundler`
+resolution to match esbuild, so extensionless relative imports and
+loader-backed imports (`import x from "./y.wgsl"`) type-check exactly as the
+bundler resolves them.
 
-Module resolution in the generated tsconfig depends on the target: the default
-single-entry target uses `NodeNext` (Node app, `.ts` extensions required), while
-the **js library target** (directory entry) uses `Bundler` resolution to match
-esbuild &mdash; so a library can use extensionless relative imports and
-loader-backed imports (`import x from "./y.wgsl"`) without `.ts` extensions. HTML
-entries skip type-checking entirely.
+The gate's exclusions are the output dir, nested ts0 projects, and any
+directories listed in the config's `exclude` field (for trees that type-check
+under their own separate tsconfig &mdash; a test harness with different types,
+an experiment dir). `exclude` never changes what gets built, only what the
+gate checks.
 
 ## JSX
 
@@ -238,7 +255,7 @@ esbuild's classic `React.createElement` transform and break Preact at runtime.
 ## HTML entries
 
 When `entry` ends with `.html`, `build.ts` delegates to `commands/build-html.ts`.
-That module reads the HTML and inlines four classes of dependency:
+That module reads the HTML and inlines five classes of dependency:
 
 1. `<script src="local">` &mdash; bundled with esbuild, inlined as `<script>…</script>`.
 2. `<script type="module">…inline body…</script>` &mdash; bundled via esbuild's
@@ -257,6 +274,16 @@ That module reads the HTML and inlines four classes of dependency:
     placeholder that's replaced at build time. Use `replaceAll` (not `replace`)
     when substituting; the file's own header comment necessarily mentions the
     placeholder name.
+
+5. Bookmarklet links &mdash; an `href="javascript:<local source file>"`
+    (extension `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`) is bundled as a
+    browser IIFE, **always minified** (a bookmarklet is a URL; length is the
+    constraint), percent-encoded with `encodeURIComponent`, and substituted
+    back as `javascript:<encoded>`. Real inline-JS hrefs
+    (`javascript:void(0)`) don't match the extension test and are left
+    untouched; a file-looking reference that doesn't exist is a build error.
+    encodeURIComponent escapes quotes/`&`/`#`/whitespace, so the encoded
+    bundle is attribute-safe raw.
 
 `.json` is deliberately not in the asset extension list, so `ts0.json` and
 `package.json` aren't picked up. Disable embedding entirely with
@@ -289,6 +316,26 @@ both running modes work:
 `package.json`'s `"files"` ships both `dist/ts0` and
 `src/runtime/fetch-interceptor.js` so installs from a published tarball or
 git URL find the template.
+
+## Userscript bundling (iife + globalName + preserveHeader)
+
+`format: "iife"` (plus optional `globalName`) is threaded through
+`baseEsbuildOptions()` like the other formats, so it applies to the default and
+js targets alike. `preserveHeader: true` (single-entry target only) re-prepends
+the entry's leading comment block to the written bundle: esbuild strips
+comments, but a userscript's `==UserScript==` block (or a mandated license
+banner) is load-bearing metadata of the OUTPUT file and must survive
+byte-exactly at the top. Mechanics (`leadingCommentBlock` +
+`preserveHeaderPlugin` in build.ts): an esbuild `onEnd` hook &mdash; covering
+the one-shot build and every watch rebuild, each of which rewrites the file, so
+headers never stack &mdash; reads the entry, extracts the maximal leading run
+of `//` lines (or one `/* … */` block) byte-exactly, and prepends it to the
+output file. The header sits above the bundle's own first line; a leading
+`"use strict";` (esbuild emits one when the consumer project's tsconfig sets
+`alwaysStrict`/`strict`) stays an effective directive because comments never
+break the directive prologue. Node-target outfiles keep their
+`#!/usr/bin/env node` shebang; browser-target outfiles get none (a shebang is
+a Node convenience and would corrupt a userscript header).
 
 ## js (library) target
 
