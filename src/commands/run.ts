@@ -12,10 +12,13 @@ export interface RunOptions {
 	args?: string[];
 	// Specific file to run (overrides entry)
 	file?: string;
+	// Explicit ts0 config file (the --config CLI flag); default: walk up
+	// from the cwd looking for ts0.json.
+	configPath?: string;
 }
 
 export async function run(options: RunOptions = {}): Promise<void> {
-	const { config, rootDir } = loadConfig();
+	const { config, rootDir } = loadConfig(options.configPath);
 
 	if (isHtmlEntry(options.file ?? config.entry)) {
 		console.error("ts0 run does not support HTML entries. Use 'ts0 build' to produce a bundled HTML file.");
@@ -48,7 +51,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		if (options.noBuild) {
 			await runWithNode(fileToRun, options.args || [], true);
 		} else {
-			const result = await build();
+			const result = await build({ configPath: options.configPath });
 			if (!result.success) {
 				console.error("Build failed:");
 				result.errors.forEach((e) => console.error(e));
@@ -70,7 +73,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const fileToRun = join(rootDir, config.entry);
 			await runWithNode(fileToRun, options.args || [], true);
 		} else {
-			const result = await build();
+			const result = await build({ configPath: options.configPath });
 			if (!result.success) {
 				console.error("Build failed:");
 				result.errors.forEach((e) => console.error(e));
