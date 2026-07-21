@@ -460,7 +460,9 @@ How the pieces fit:
     action with `artifact_name: prebuilt` &mdash; no inline publish
     scripting; if the action ever lacks something, fix it upstream in the
     buildhost repo, never with a hand-rolled step here. It self-serves the
-    run artifact (needs `actions: read`), authenticates via GHA OIDC
+    run artifact and runs a pre-publish guard that scans the run's jobs and
+    the head commit's check runs (hence `actions: read` + `checks: read`
+    &mdash; the guard fails closed without both), authenticates via GHA OIDC
     (`id-token: write`; buildhost auto-provisions the projects, public
     because this repo is public), and maps files by naming convention:
     `ts0_cosmo_any` &rarr; project `ts0`, one artifact under the cosmo/any

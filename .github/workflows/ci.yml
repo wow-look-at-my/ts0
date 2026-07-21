@@ -338,7 +338,12 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # The buildhost-publish action (consumed @master) also front-runs the
+      # org's no-all-builds shadow guard, which scans this run's jobs and the
+      # head commit's check runs -- it FAILS CLOSED without these two reads
+      # (actions: read doubles as the artifact self-serve grant above).
       actions: read
+      checks: read
     steps:
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
         with:
