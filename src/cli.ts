@@ -1,4 +1,4 @@
-import { build, typecheck } from "./commands/build.ts";
+import { build } from "./commands/build.ts";
 import { run } from "./commands/run.ts";
 import { test } from "./commands/test.ts";
 import { init } from "./commands/init.ts";
@@ -18,6 +18,8 @@ Commands:
 Options:
 	--watch, -w			 Watch mode (build, test)
 	--no-build				Skip build step (run)
+	--config <path>	 Use an explicit config file instead of the nearest
+								ts0.json (build, run, test)
 	--entry <path>		Override the configured entry (build)
 	--outfile <path>	Override outfile, single-file output (build)
 	--outdir <path>	 Override outdir (build)
@@ -37,6 +39,9 @@ Entry points:
 	*.ts					# Bundled to a single JS file (or directory)
 	*.html					# All <script src> and <link rel=stylesheet>
 								referenced locally are inlined into the output HTML
+	<dir>/					# "js" library target: every *.ts under the
+								directory is compiled to a parallel *.js tree,
+								structure preserved (e.g. src/a/b.ts -> dist/a/b.js)
 `;
 
 async function main() {
@@ -54,9 +59,10 @@ async function main() {
 		return undefined;
 	};
 
-	// Positional args, skipping option pairs like `--entry foo.html`.
-	const getPositional = (index: number) => {
-		const optionsTakingValue = new Set(["entry", "outfile", "outdir"]);
+	// Positional args, skipping option pairs like `--entry foo.html` (the
+	// option value must not be mistaken for a positional).
+	const getPositionals = () => {
+		const optionsTakingValue = new Set(["entry", "outfile", "outdir", "config"]);
 		const filtered: string[] = [];
 		for (let i = 1; i < args.length; i++) {
 			const a = args[i];
@@ -68,8 +74,9 @@ async function main() {
 			if (a.startsWith("-")) continue;
 			filtered.push(a);
 		}
-		return filtered[index - 1];
+		return filtered;
 	};
+	const getPositional = (index: number) => getPositionals()[index - 1];
 
 	if (!command || hasFlag("help", "h")) {
 		console.log(HELP);
@@ -89,22 +96,20 @@ async function main() {
 				outdir: getOption("outdir"),
 			};
 
-			console.log("Type-checking...");
-			const checkResult = await typecheck(overrides);
-			if (!checkResult.success) {
-				console.error(checkResult.output);
-				process.exit(1);
-			}
-
-			console.log("Building...");
-			const result = await build({ watch: hasFlag("watch", "w"), overrides });
+			// build() type-checks before emitting anything (see commands/build.ts);
+			// a type error comes back as a failed result here, never as output.
+			const result = await build({
+				watch: hasFlag("watch", "w"),
+				overrides,
+				configPath: getOption("config"),
+			});
 
 			if (!hasFlag("watch", "w")) {
 				if (result.success) {
 					console.log(`Built in ${result.duration.toFixed(0)}ms`);
 				} else {
 					console.error("Build failed:");
-					result.errors.forEach((e) => console.error(`	${e}`));
+					result.errors.forEach((e) => console.error(e));
 					process.exit(1);
 				}
 			}
@@ -112,11 +117,15 @@ async function main() {
 		}
 
 		case "run": {
-			const file = getPositional(1);
+			const positionals = getPositionals();
+			const file = positionals[0];
 			await run({
 				file,
 				noBuild: hasFlag("no-build"),
-				args: args.slice(file ? 2 : 1).filter((a) => !a.startsWith("-")),
+				// Positionals after the file are the program's own arguments
+				// (option values like `--config x.json` are never leaked here).
+				args: positionals.slice(1),
+				configPath: getOption("config"),
 			});
 			break;
 		}
@@ -126,6 +135,7 @@ async function main() {
 			await test({
 				pattern,
 				watch: hasFlag("watch", "w"),
+				configPath: getOption("config"),
 			});
 			break;
 		}
