@@ -307,7 +307,7 @@ jobs:
           dir=$(mktemp -d)
           printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$dir/ts0.json"
           mkdir -p "$dir/src" "$dir/junk"
-          printf 'console.log("ok");\nexport {};\n' > "$dir/src/main.ts"
+          printf 'export const ok: number = 1;\n' > "$dir/src/main.ts"
           printf 'const n: number = "nope";\nexport {};\n' > "$dir/junk/broken.ts"
           cd "$dir"
           if ts0 build; then echo "FAIL: gate ignored junk/broken.ts"; exit 1; fi
