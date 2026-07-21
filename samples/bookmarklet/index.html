@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ts0 bookmarklet sample</title>
+    <style>
+        .bookmarklet { display: inline-block; padding: 8px 16px; background: #2563eb; color: white; }
+    </style>
+</head>
+<body>
+    <h1>Copy Page Title</h1>
+    <p>Drag this link to your bookmarks bar:</p>
+
+    <a class="bookmarklet" href="javascript:./src/copy-title.ts">Copy Title</a>
+
+    <p>BOOKMARKLET_PAGE_MARKER: everything outside the href is left byte-for-byte untouched.</p>
+    <p><a href="javascript:void(0)">this real javascript: href is not a file reference and stays as-is</a></p>
+</body>
+</html>

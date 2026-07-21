@@ -237,6 +237,85 @@ jobs:
           test -z "$(find dist -name '*.d.ts')"
           echo "Opt-out OK: .js emitted, no .d.ts"
 
+      - name: Test userscript sample (iife + globalName + preserveHeader)
+        working-directory: samples/userscript
+        run: |
+          ts0 build
+          test -f dist/main.user.js
+          # The ==UserScript== metadata header must survive byte-exactly at
+          # the very top of the bundle (esbuild strips comments; preserveHeader
+          # re-prepends the entry's leading comment block), exactly once.
+          head -1 dist/main.user.js | grep -qx '// ==UserScript=='
+          test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
+          test "$(grep -c '^// ==/UserScript==$' dist/main.user.js)" -eq 1
+          grep -q '^// @version      1.0$' dist/main.user.js
+          # Directly below the header sits the IIFE assigned to the configured
+          # global -- and the output is a plain script: no module statements,
+          # no shebang (that is a node-outfile convenience, never browser).
+          sed -n '8p' dist/main.user.js | grep -q '^var __USERSCRIPT_API'
+          ! grep -qE '^(import|export) ' dist/main.user.js
+          ! head -1 dist/main.user.js | grep -q '^#!'
+          # The extensionless ./lib/greet import both type-checked (browser
+          # targets are gate-checked with bundler resolution, matching
+          # esbuild) and got inlined into the bundle.
+          grep -q 'hello from a bundled' dist/main.user.js
+          # A rebuild must not stack a second header on top of the first.
+          ts0 build
+          test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
+
+      - name: Test bookmarklet sample (javascript: href bundling)
+        working-directory: samples/bookmarklet
+        run: |
+          ts0 build
+          test -f dist/index.html
+          # The javascript:<file> href is replaced by javascript: plus the
+          # percent-encoded minified bundle; the raw file reference is gone.
+          ! grep -q 'javascript:./src/copy-title.ts' dist/index.html
+          grep -q 'href="javascript:(()%3D%3E' dist/index.html
+          # Decoding the href yields the bundled program (the ./lib/toast
+          # import must be inlined into it).
+          node -e '
+            const html = require("fs").readFileSync("dist/index.html", "utf8");
+            const href = html.match(/href="javascript:([^"]+)"/)[1];
+            const code = decodeURIComponent(href);
+            if (!code.includes("copied:")) throw new Error("entry code missing from decoded bookmarklet");
+            if (!code.includes("createElement")) throw new Error("lib import not inlined into bookmarklet");
+          '
+          # A real javascript: href (not a file reference) stays untouched,
+          # the rest of the page is preserved, and no fetch interceptor is
+          # injected (the page has no embeddable assets).
+          grep -q 'href="javascript:void(0)"' dist/index.html
+          grep -q 'BOOKMARKLET_PAGE_MARKER' dist/index.html
+          ! grep -q 'window.fetch' dist/index.html
+
+      - name: --config flag selects an explicit config file
+        run: |
+          # Multiple differently-configured builds in one repo: --config
+          # points at a named config; rootDir stays the config file's
+          # directory, so entry/outfile resolve exactly as a walk-up find
+          # would resolve them.
+          rm -rf samples/userscript/dist
+          ts0 build --config samples/userscript/ts0.json
+          test -f samples/userscript/dist/main.user.js
+          head -1 samples/userscript/dist/main.user.js | grep -qx '// ==UserScript=='
+
+      - name: exclude config limits the type-check gate
+        run: |
+          # A tree that type-checks under its own separate tsconfig (a test
+          # harness, an experiment dir) must be excludable from the gate --
+          # without exclude the build fails on it, with exclude it builds.
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$dir/ts0.json"
+          mkdir -p "$dir/src" "$dir/junk"
+          printf 'console.log("ok");\nexport {};\n' > "$dir/src/main.ts"
+          printf 'const n: number = "nope";\nexport {};\n' > "$dir/junk/broken.ts"
+          cd "$dir"
+          if ts0 build; then echo "FAIL: gate ignored junk/broken.ts"; exit 1; fi
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "exclude": ["junk"] }' > ts0.json
+          ts0 build
+          test -f dist/main.js
+          echo "exclude OK: gate skipped the excluded dir, build unchanged"
+
       - name: Upload html sample build
         if: always()
         uses: actions/upload-artifact@v4

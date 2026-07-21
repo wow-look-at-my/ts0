@@ -6,7 +6,8 @@
 # natives (so the smoke needs no external network). It then runs the same
 # assertions CI makes against the npm build: the init flow, the type-check
 # gate, and the samples (basic, js incl. declaration emit + determinism,
-# html, html-jsx) -- plus the prebuilt-specific behaviors: the pipe form
+# html, html-jsx, userscript, bookmarklet) -- plus the prebuilt-specific
+# behaviors: the pipe form
 # (`cat ts0.js | node - build`), the clear fetch-failure message, and
 # offline cache reuse.
 #
@@ -203,6 +204,33 @@ echo "== samples/html-jsx (automatic Preact runtime) =="
 	test -f dist/index.html
 	! grep -q 'React.createElement' dist/index.html
 	grep -q 'preact/jsx-runtime' dist/index.html
+)
+
+echo "== samples/userscript (iife + globalName + preserveHeader) =="
+(
+	cd "$REPO/samples/userscript"
+	rm -rf dist
+	t0 build
+	test -f dist/main.user.js
+	head -1 dist/main.user.js | grep -qx '// ==UserScript=='
+	test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
+	grep -q '^var __USERSCRIPT_API' dist/main.user.js
+	grep -q 'hello from a bundled' dist/main.user.js
+	# A rebuild must not stack a second header on top of the first.
+	t0 build
+	test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
+)
+
+echo "== samples/bookmarklet (javascript: href bundling) =="
+(
+	cd "$REPO/samples/bookmarklet"
+	rm -rf dist
+	t0 build
+	test -f dist/index.html
+	! grep -q 'javascript:./src/copy-title.ts' dist/index.html
+	grep -q 'href="javascript:(()%3D%3E' dist/index.html
+	grep -q 'href="javascript:void(0)"' dist/index.html
+	grep -q 'BOOKMARKLET_PAGE_MARKER' dist/index.html
 )
 
 echo "== cache extracted exactly once; esbuild native fetched exactly once =="

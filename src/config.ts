@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 
 export interface Ts0Config {
 	// Entry point - auto-detected if not specified
@@ -12,8 +12,15 @@ export interface Ts0Config {
 	// Target runtime
 	target: "node" | "browser";
 
-	// Module format
-	format: "esm" | "cjs";
+	// Module format. "iife" wraps the bundle in an immediately-invoked
+	// function (browser-script style, no module system needed); pair it with
+	// `globalName` to expose the entry's exports on a global variable.
+	format: "esm" | "cjs" | "iife";
+
+	// Global variable that receives the entry's exports when format is
+	// "iife" (esbuild's globalName), e.g. "MyLib" makes the bundle assign
+	// `var MyLib = (() => { ... })()`. Ignored by other formats.
+	globalName?: string;
 
 	// TypeScript strictness
 	strict: boolean;
@@ -61,6 +68,24 @@ export interface Ts0Config {
 	// Ignored by the single-entry and HTML targets.
 	declarations?: boolean;
 
+	// Single-entry target only: re-prepend the entry file's leading comment
+	// block (a run of consecutive `//` lines, or one `/* ... */` block,
+	// starting at byte 0) to the bundled output, byte-exactly. esbuild strips
+	// comments when bundling; this preserves headers that are semantically
+	// load-bearing -- a userscript's ==UserScript== metadata block, a license
+	// banner a distributor requires at the top of the artifact, etc. The
+	// header is inserted above the bundle's own first line (a leading
+	// `"use strict";` directive stays effective -- comments don't break the
+	// directive prologue). Default false.
+	preserveHeader?: boolean;
+
+	// Directories (relative to the config file) to exclude from the
+	// type-check gate, e.g. ["test", "spike"] for trees that type-check
+	// under their own separate tsconfig. node_modules, the output dir, and
+	// nested ts0 projects are always excluded; this adds to that list.
+	// It does not change what gets built -- only what the gate checks.
+	exclude?: string[];
+
 	// Map file extensions to how their imports are loaded, e.g.
 	// { ".wgsl": "text" } to import shader files as strings, or
 	// { ".png": "dataurl" } to inline images. Values are loader names
@@ -101,7 +126,11 @@ export function findConfigFile(startDir: string = process.cwd()): string | null 
 }
 
 export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: string } {
-	const foundPath = configPath || findConfigFile();
+	// An explicit path (the --config CLI flag) is resolved against the cwd so
+	// rootDir -- dirname of the config -- is always absolute. Multiple builds
+	// of one repo (e.g. a bundle and an HTML page with different settings) can
+	// each keep their own named config file this way.
+	const foundPath = configPath ? resolve(configPath) : findConfigFile();
 
 	if (!foundPath || !existsSync(foundPath)) {
 		// No config file - use defaults and auto-detect entry
@@ -126,6 +155,12 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 	if (config.assetDirs !== undefined) {
 		if (!Array.isArray(config.assetDirs) || !config.assetDirs.every((d: unknown) => typeof d === "string" && d.length > 0)) {
 			throw new Error("ts0: assetDirs must be an array of non-empty strings");
+		}
+	}
+
+	if (config.exclude !== undefined) {
+		if (!Array.isArray(config.exclude) || !config.exclude.every((d: unknown) => typeof d === "string" && d.length > 0)) {
+			throw new Error("ts0: exclude must be an array of non-empty strings");
 		}
 	}
 
