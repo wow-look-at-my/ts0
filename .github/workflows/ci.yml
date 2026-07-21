@@ -418,6 +418,7 @@ jobs:
       id-token: write
       contents: read
       actions: read
+      checks: read
     steps:
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
         with:
