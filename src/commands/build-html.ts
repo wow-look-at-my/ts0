@@ -305,6 +305,59 @@ async function processHtml(
 		}
 	}
 
+	// Bookmarklet links: an href of the form `javascript:<local source file>`
+	// (e.g. <a href="javascript:./src/tool.ts">) gets the referenced file
+	// bundled and substituted in as a real bookmarklet URL --
+	// `javascript:` + the percent-encoded bundle. Only hrefs whose remainder
+	// ends in a bundleable source extension are treated as file references;
+	// actual inline JavaScript hrefs (javascript:void(0), ...) are left
+	// untouched. The bundle is always minified regardless of config.minify: a
+	// bookmarklet is a URL, and its length is the constraint that matters.
+	const bookmarkletSrcRe = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;
+	const bookmarkletRe = /(href\s*=\s*)(["'])javascript:([^"']+)\2/gi;
+	for (const match of html.matchAll(bookmarkletRe)) {
+		const [fullMatch, prefix, quote, ref] = match;
+		if (!bookmarkletSrcRe.test(ref)) continue;
+		const filePath = resolve(sourceDir, ref);
+		if (!existsSync(filePath)) {
+			errors.push(`${ref}: bookmarklet href references a missing file (resolved to ${filePath})`);
+			continue;
+		}
+
+		try {
+			const result = await esbuild.build({
+				entryPoints: [filePath],
+				bundle: true,
+				platform: "browser",
+				format: "iife",
+				minify: true,
+				sourcemap: false,
+				target: "esnext",
+				write: false,
+				logLevel: "silent",
+				...(config.jsx && { jsx: config.jsx }),
+				...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
+				...config.esbuild,
+			});
+
+			if (result.errors.length > 0) {
+				errors.push(...result.errors.map((e) => formatEsbuildMessage(e)));
+				continue;
+			}
+
+			const code = (result.outputFiles?.[0]?.text ?? "").trim();
+			// encodeURIComponent escapes every character that could terminate
+			// the attribute or the URL (quotes, &, #, whitespace), so the
+			// encoded bundle is attribute-safe as-is.
+			replacements.push({
+				match: fullMatch,
+				replacement: `${prefix}${quote}javascript:${encodeURIComponent(code)}${quote}`,
+			});
+		} catch (err) {
+			errors.push(formatBuildError(err, filePath));
+		}
+	}
+
 	let result = html;
 	for (const { match, replacement } of replacements) {
 		result = result.replace(match, () => replacement);

@@ -92,6 +92,7 @@ ts0 build     # produce a bundled output
 
 - `--watch`, `-w` &mdash; watch mode (`build`, `test`)
 - `--no-build` &mdash; skip the bundle step and run sources directly via `--experimental-strip-types`; still type-checked first (`run`)
+- `--config <path>` &mdash; use an explicit config file instead of the nearest `ts0.json` (`build`, `run`, `test`). The config's directory stays the project root, so a repo can keep several differently-configured builds side by side (`ts0 build --config ts0.tool.json && ts0 build --config ts0.site.json`)
 - `--entry <path>` &mdash; override the configured entry for this `build` invocation
 - `--outfile <path>` &mdash; override `outfile`; produces a single file at this path (`build`)
 - `--outdir <path>` &mdash; override `outdir` (`build`)
@@ -136,7 +137,10 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `outfile`   | `string`              | &mdash;            | Single-file output. Adds a `#!/usr/bin/env node` shebang for JS |
 | `outdir`    | `string`              | `"dist"`           | Used when `outfile` is not set                                |
 | `target`    | `"node" \| "browser"` | `"node"`           | esbuild platform (ignored for HTML entries &mdash; always browser) |
-| `format`    | `"esm" \| "cjs"`      | `"esm"`            | Output module format                                          |
+| `format`    | `"esm" \| "cjs" \| "iife"` | `"esm"`       | Output module format. `"iife"` wraps the bundle in an immediately-invoked function (browser-script style); pair with `globalName` |
+| `globalName` | `string`             | &mdash;            | With `format: "iife"`: global variable that receives the entry's exports (`var MyLib = (() => {…})()`) |
+| `preserveHeader` | `boolean`        | `false`            | Single-entry target: re-prepend the entry file's leading comment block to the bundle, byte-exactly (see [Userscripts and headered bundles](#userscripts-and-headered-bundles)) |
+| `exclude`   | `string[]`            | &mdash;            | Directories (relative to the config file) excluded from the type-check gate, e.g. a test tree checked by its own tsconfig. Does not change what gets built |
 | `strict`    | `boolean`             | `true`             | Toggles TypeScript `strict` mode for the type-check step      |
 | `minify`    | `boolean`             | `false`            | Minify the bundle                                             |
 | `sourcemap` | `boolean`             | `true`             | Emit a sourcemap (inlined for HTML entries)                   |
@@ -149,12 +153,41 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `declarations` | `boolean`          | `true`             | js (library) target only: emit a parallel `*.d.ts` tree into `outdir` alongside the compiled `*.js` (see [Type declarations](#type-declarations)). Set `false` to skip. Ignored by the single-entry and HTML targets. |
 | `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
-When `outfile` is set, `ts0` produces a single executable file with a Node shebang &mdash;
-useful for shipping a CLI as one file. When only `outdir` is set, output goes there
-preserving the entry's basename.
+When `outfile` is set with a Node target, `ts0` produces a single executable file
+with a `#!/usr/bin/env node` shebang &mdash; useful for shipping a CLI as one file.
+Browser-target outfiles get no shebang. When only `outdir` is set, output goes
+there preserving the entry's basename.
 
 For Node targets, `packages: "external"` is set automatically so `node_modules` are not
 bundled into the output.
+
+### Userscripts and headered bundles
+
+Some artifacts carry a comment header that is semantically load-bearing in the
+*output* file &mdash; a userscript's `==UserScript==` metadata block (parsed by
+Tampermonkey/Greasemonkey from the installed file), or a license banner a
+distributor requires at the top. esbuild strips comments while bundling;
+`preserveHeader: true` re-prepends the **entry file's leading comment block**
+(a run of consecutive `//` lines, or one `/* … */` block, starting at byte 0)
+to the bundled output, byte-exactly. Combined with `format: "iife"` +
+`globalName`, a multi-module userscript builds to one self-contained file:
+
+```json
+{
+    "entry": "src/my-script.user.ts",
+    "outfile": "dist/my-script.user.js",
+    "target": "browser",
+    "format": "iife",
+    "globalName": "__MY_SCRIPT_API",
+    "preserveHeader": true,
+    "sourcemap": false
+}
+```
+
+The header lands above the bundle's own first line; a leading `"use strict";`
+in the bundle (emitted by esbuild when the project's `tsconfig.json` sets
+`alwaysStrict`/`strict`) remains an effective directive &mdash; comments never
+break the directive prologue. See `samples/userscript`.
 
 ### HTML entries
 
@@ -176,6 +209,23 @@ that runs from disk (`file://`) with no asset tree alongside it. Specifically:
 The project's `.ts`/`.tsx` files are type-checked (with the DOM lib) before any
 HTML is written, so a type error in an HTML project's scripts fails the build just
 like it would for a Node entry.
+
+#### Bookmarklet links
+
+An `href` of the form `javascript:<local source file>` is a **bookmarklet
+link**: `ts0 build` bundles the referenced file (browser IIFE, always
+minified &mdash; a bookmarklet is a URL, and length is the constraint) and
+substitutes `javascript:` + the percent-encoded bundle into the href, so the
+page ships a drag-to-bookmarks-bar link with no separate build step:
+
+```html
+<a href="javascript:./src/copy-title.ts">Copy Title</a>
+```
+
+Only hrefs ending in a bundleable source extension (`.ts`, `.tsx`, `.js`,
+`.jsx`, `.mjs`, `.cjs`) are treated as file references &mdash; real inline
+JavaScript hrefs (`javascript:void(0)`) are left untouched. A file-looking
+reference that doesn't exist fails the build. See `samples/bookmarklet`.
 
 ```html
 <!-- index.html -->

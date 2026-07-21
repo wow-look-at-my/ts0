@@ -8,10 +8,13 @@ import { runTypecheck } from "./build.ts";
 export interface TestOptions {
 	pattern?: string;
 	watch?: boolean;
+	// Explicit ts0 config file (the --config CLI flag); default: walk up
+	// from the cwd looking for ts0.json.
+	configPath?: string;
 }
 
 export async function test(options: TestOptions = {}): Promise<void> {
-	const { config, rootDir } = loadConfig();
+	const { config, rootDir } = loadConfig(options.configPath);
 	const pattern = options.pattern || config.test.pattern;
 
 	const findTestFiles = async (): Promise<string[]> => {
