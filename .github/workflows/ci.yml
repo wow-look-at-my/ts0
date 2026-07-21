@@ -263,7 +263,7 @@ jobs:
           ts0 build
           test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
 
-      - name: Test bookmarklet sample (javascript: href bundling)
+      - name: "Test bookmarklet sample (javascript: href bundling)"
         working-directory: samples/bookmarklet
         run: |
           ts0 build
