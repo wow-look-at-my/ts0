@@ -472,6 +472,13 @@ How the pieces fit:
     resolves the latest); `scripts/build-prebuilt.ts` owns the naming, so a
     rename there is a publish-layout change. PR branches build and smoke but
     never publish.
+- **Org merge gate / job naming**: merging into master needs a green
+    `all-builds` commit status on the PR head SHA, posted automatically by
+    an org app (required-builds-manager) that aggregates every build on the
+    SHA &mdash; no special CI job naming is needed for the gate. Never name
+    a job `all-builds`: the buildhost publish actions fail any run whose
+    SHA carries a job by that name (the error says to rename); use a
+    neutral name like `aggregate` if a fan-in job is ever wanted.
 
 ## Documentation
 
