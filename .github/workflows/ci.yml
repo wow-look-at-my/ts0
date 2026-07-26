@@ -452,10 +452,13 @@ jobs:
   #   esbuild-<version>_<os>_<arch>      -> project ts0/esbuild-<version>,
   #                                         the five natives ts0.cjs fetches
   #                                         on first run
-  # Every payload is ~10 MB, far below the direct-upload cap. PR branches
-  # build and smoke but never publish.
+  # Every payload is ~10 MB, far below the direct-upload cap. Every branch
+  # publishes: buildhost treats git branch as a first-class field, and the apex
+  # "latest" only ever resolves the default branch, so a branch release cannot
+  # hijack what stable consumers download. Gating this job on master instead
+  # meant the publish path -- the only part of CI that talks to buildhost -- was
+  # skipped on every PR, so a change to it passed CI without being run once.
   publish:
-    if: github.ref == 'refs/heads/master'
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
     runs-on: ubuntu-latest
     permissions:
