@@ -466,6 +466,7 @@ jobs:
       contents: read
       actions: read
       checks: read
+      artifact-metadata: write
     steps:
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
         with:
