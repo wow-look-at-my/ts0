@@ -262,8 +262,12 @@ echo "== cache extracted exactly once; esbuild native fetched exactly once =="
 extractions=$(find "$TS0_CACHE" -mindepth 1 -maxdepth 1 -type d | wc -l)
 test "$extractions" -eq 1
 test -f "$TS0_CACHE"/*/.ts0-extracted
-test -f "$TS0_CACHE"/*/node_modules/typescript/lib/_tsc.js
+# The compiler is embedded ONCE, as the API: the extracted package is
+# lib/typescript.js plus the generated bin/tsc driver over it -- never the
+# npm package's separate CLI rebuild (lib/_tsc.js), which would duplicate it.
 test -f "$TS0_CACHE"/*/node_modules/typescript/lib/typescript.js
+test -f "$TS0_CACHE"/*/node_modules/typescript/bin/tsc
+test -z "$(find "$TS0_CACHE" -name '_tsc.js')"
 test -f "$TS0_CACHE"/*/src/runtime/fetch-interceptor.js
 test -x "$TS0_CACHE"/*/esbuild/esbuild
 

@@ -480,16 +480,29 @@ How the pieces fit:
 
 - **The bundle** (`src/prebuilt/main.ts` &rarr; `ts0.cjs`): the CLI, the
     esbuild JS API, and the ENTIRE TypeScript compiler (pure JS) in one file.
-    The tsc CLI chain (`bin/tsc`, `lib/tsc.js`, `lib/_tsc.js`), the compiler
-    API (`lib/typescript.js`, required in-process by the explicit-`any` pass),
-    and every `lib/lib.*.d.ts` standard library are embedded as strings via
-    the generated `ts0-prebuilt-assets` virtual module (an esbuild plugin
-    injects it at package time; `src/prebuilt/prebuilt-assets.d.ts` is the
-    ambient declaration that keeps the repo type-check happy without it).
-    Embedding both the CLI chain and the API costs ~9 MiB of duplication
-    (~18 MiB total, ~3 MiB gzipped on the wire) and is deliberate: the gate
-    keeps spawning `bin/tsc` exactly as the npm install does, rather than
-    driving the compiler through an internal API to save bytes.
+    The compiler API (`lib/typescript.js`) and every `lib/lib.*.d.ts`
+    standard library are embedded as strings via the generated
+    `ts0-prebuilt-assets` virtual module (an esbuild plugin injects it at
+    package time; `src/prebuilt/prebuilt-assets.d.ts` is the ambient
+    declaration that keeps the repo type-check happy without it). ~12 MiB
+    total, ~2 MiB gzipped on the wire.
+- **The compiler is embedded ONCE.** The npm package ships it twice --
+    `lib/typescript.js` (the API) and `lib/_tsc.js` (the same compiler
+    rebuilt as a CLI, reached through `bin/tsc` &rarr; `lib/tsc.js`) -- and
+    ts0 needs both capabilities: the gate spawns the CLI, and the
+    explicit-`any` pass requires the API in-process. Embedding both would add
+    ~9 MiB of duplicated compiler, so only the API ships and
+    `scripts/build-prebuilt.ts` GENERATES `bin/tsc` (`TSC_DRIVER`) doing what
+    `_tsc.js` does at its tail: enable the compile cache, `sys.setBlocking()`
+    (so a piped diagnostic dump can't be truncated), then
+    `executeCommandLine(sys, noop, sys.args)`. Verified identical to the
+    stock CLI on diagnostics text, exit codes, and declaration-emit bytes,
+    and `runTsc` still spawns `node <bin/tsc> --project ...` unchanged, so
+    the gate behaves exactly as it does on the npm path. `executeCommandLine`
+    is a runtime export absent from `typescript.d.ts`: the packaging script
+    asserts it exists, and the boot sanity runs a real failing + passing
+    build through the driver, so a TypeScript upgrade that moved it breaks
+    packaging rather than a consumer's first run.
 - **Format is CommonJS, extension is .cjs, and both are load-bearing.**
     `node -` executes stdin as CJS with no flags, which is what keeps the
     pipe form (`curl ... | node - build`) flagless; and a `.js` file would be
@@ -534,9 +547,10 @@ How the pieces fit:
     quoting in `runTsc`'s exec string (spaced paths). The npm/git-install
     path must never notice the prebuilt exists.
 - **What must stay in sync when deps bump**: the typescript embed list in
-    `embeddedFiles` (the `bin/tsc` &rarr; `lib/tsc.js` &rarr; `lib/_tsc.js`
-    chain plus `lib/typescript.js` are a TypeScript-5.x layout &mdash; the
-    script throws at package time if renamed); the esbuild version is read from the lockfile and baked
+    `embeddedFiles` (`lib/typescript.js` + `lib/lib.*.d.ts` is a
+    TypeScript-5.x layout, and the generated `bin/tsc` driver depends on the
+    `executeCommandLine` runtime export &mdash; the script throws at package
+    time if either moves); the esbuild version is read from the lockfile and baked
     into both the native-fetch URL and the buildhost project name
     (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
     new natives project on the next master merge.
@@ -545,10 +559,11 @@ How the pieces fit:
     (`env -i`, PATH holds ONLY node; npm/npx asserted unreachable) that
     exercises the real fetch path against a local HTTP server, the
     fetch-failure message, the PIPE form (`cat ts0.cjs | node - build`), the
-    init flow, the type-error gate, the explicit-`any` ban (the only path
-    that loads the extracted `lib/typescript.js`, checked in the pipe form
-    too), every sample assertion incl. declaration determinism, and offline
-    cache reuse; `smoke-prebuilt-linux-arm64`
+    init flow, the type-error gate, the explicit-`any` ban (the pass that
+    requires the extracted `lib/typescript.js` in-process, checked in the
+    pipe form too), the extracted tree's shape (API + generated `bin/tsc`,
+    and NO `_tsc.js` &mdash; the no-duplicated-compiler assertion), every
+    sample assertion incl. declaration determinism, and offline cache reuse; `smoke-prebuilt-linux-arm64`
     repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
     macOS/windows natives ship without a CI execution job on purpose: they
     are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
