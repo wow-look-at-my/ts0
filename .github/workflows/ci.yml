@@ -463,6 +463,10 @@ jobs:
       contents: read
       actions: read
       checks: read
+      # buildhost-publish records every artifact it uploaded on the org's
+      # linked artifacts page; that recording is part of publishing, not
+      # optional, so the publish fails without this.
+      artifact-metadata: write
     steps:
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
         with:
