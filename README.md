@@ -141,7 +141,7 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `globalName` | `string`             | &mdash;            | With `format: "iife"`: global variable that receives the entry's exports (`var MyLib = (() => {…})()`) |
 | `preserveHeader` | `boolean`        | `false`            | Single-entry target: re-prepend the entry file's leading comment block to the bundle, byte-exactly (see [Userscripts and headered bundles](#userscripts-and-headered-bundles)) |
 | `exclude`   | `string[]`            | &mdash;            | Directories (relative to the config file) excluded from the type-check gate, e.g. a test tree checked by its own tsconfig. Does not change what gets built |
-| `strict`    | `boolean`             | `true`             | Toggles TypeScript `strict` mode for the type-check step      |
+| `strict`    | `boolean`             | `true`             | Toggles TypeScript `strict` mode for the type-check step. Explicit `any` is rejected either way &mdash; that ban is not configurable |
 | `minify`    | `boolean`             | `false`            | Minify the bundle                                             |
 | `sourcemap` | `boolean`             | `true`             | Emit a sourcemap (inlined for HTML entries)                   |
 | `test.pattern` | `string`           | `"**/*.test.ts"`   | Glob for test files                                           |
@@ -364,6 +364,15 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     Node. There is no escape hatch. In every `--watch` mode (`build` *and* `test`)
     each cycle re-checks, so introducing a type error stops the run/rebuild and
     leaves the previous good output in place instead of running something broken.
+- **No `any`, explicit or implicit.** `strict` makes an *implicit* `any` an
+    error; ts0 additionally rejects an *explicit* one &mdash; `x: any`,
+    `x as any`, `<any>x`, `any[]`, `Promise<any>`, in sources and `.d.ts` files
+    alike &mdash; because it switches type-checking off wherever it appears.
+    Annotate the real type, or use `unknown` and narrow it. The check parses
+    with the TypeScript compiler, so identifiers, strings, comments and JSX text
+    that merely contain the word "any" are untouched. It runs inside the same
+    gate, so it fails `build`, `run`, and `test` alike; a directory listed in
+    `exclude` is skipped by it too.
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
     `ts0.json` (the DOM libs for browser/HTML entries, ESNext for Node), then
     bundles with esbuild. A pure-JS project with no TypeScript sources has nothing

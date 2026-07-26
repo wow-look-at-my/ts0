@@ -105,6 +105,46 @@ jobs:
           if [ -e dist ]; then echo "FAIL: js-target build wrote dist/ despite a type error"; exit 1; fi
           echo "js-target gate OK: no .js and no partial .d.ts emitted"
 
+      - name: Explicit any is a build error
+        run: |
+          # Explicit `any` is banned as hard as implicit `any`: it must fail
+          # every code path (build, run, run --no-build, test) and emit
+          # nothing. The program is otherwise valid TypeScript -- tsc has no
+          # flag for explicit `any`, so a skipped ban would build cleanly and
+          # this step is what catches that.
+          dir=$(mktemp -d)
+          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
+          mkdir -p "$dir/src"
+          printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$dir/src/main.ts"
+          printf 'export {};\n' > "$dir/src/noop.test.ts"
+          cd "$dir"
+          if ts0 build; then echo "FAIL: ts0 build succeeded despite an explicit any"; exit 1; fi
+          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite an explicit any"; exit 1; fi
+          if ts0 run; then echo "FAIL: ts0 run succeeded despite an explicit any"; exit 1; fi
+          if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite an explicit any"; exit 1; fi
+          if ts0 test; then echo "FAIL: ts0 test ran tests despite an explicit any"; exit 1; fi
+          # Every spelling of it, and declaration files too (the gate's
+          # skipLibCheck means tsc never looks inside those).
+          for form in 'const a = 1 as any;' 'const a = <any>1;' 'const a: any[] = [];' 'let a: Promise<any>;' 'type A = any;'; do
+            printf 'export {};\n%s\nvoid 0;\n' "$form" > src/main.ts
+            if ts0 build; then echo "FAIL: ts0 build accepted: $form"; exit 1; fi
+          done
+          printf 'export const ok: number = 1;\n' > src/main.ts
+          printf 'declare module "*.frag" {\n\tconst src: any;\n\texport default src;\n}\n' > src/shim.d.ts
+          if ts0 build; then echo "FAIL: ts0 build accepted an explicit any in a .d.ts"; exit 1; fi
+          rm src/shim.d.ts
+          # ...and it must NOT fire on the word "any" outside a type: the ban
+          # is a real parse, not a text search, so identifiers, strings,
+          # comments, regexes and JSX text that merely read "any" still build.
+          printf '%s\n' '// a comment about any, as any, any[]' \
+            'const anyOf = 1;' \
+            'const bag = { any: 2, note: "as any" };' \
+            'const re = /any/;' \
+            'export const total = anyOf + bag.any + (re.test(bag.note) ? 1 : 0);' > src/main.ts
+          ts0 build
+          test -f dist/main.js
+          echo "Explicit-any gate OK: every any-typed form refused, look-alikes still build"
+
       - name: Test basic sample
         working-directory: samples/basic
         run: |
@@ -155,6 +195,10 @@ jobs:
           grep -q 'preact/jsx-runtime' dist/index.html
           # The rendered component's text must survive bundling.
           grep -q 'ts0 + Preact' dist/index.html
+          # JSX text containing the word "any" is prose, not a type: the
+          # explicit-any ban parses rather than text-searching, so this
+          # component builds and its tagline reaches the output.
+          grep -q 'any questions' dist/index.html
 
       - name: Test js sample
         working-directory: samples/js
