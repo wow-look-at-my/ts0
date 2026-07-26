@@ -5,7 +5,8 @@
 # fetch is exercised against a local HTTP server holding the just-built
 # natives (so the smoke needs no external network). It then runs the same
 # assertions CI makes against the npm build: the init flow, the type-check
-# gate, and the samples (basic, js incl. declaration emit + determinism,
+# gate (including the explicit-`any` ban, which loads the extracted compiler
+# API in-process), and the samples (basic, js incl. declaration emit + determinism,
 # html, html-jsx, userscript, bookmarklet) -- plus the prebuilt-specific
 # behaviors: the pipe form
 # (`cat ts0.js | node - build`), the clear fetch-failure message, and
@@ -133,6 +134,30 @@ printf 'export const n: number = "nope";\n' > "$jsdir/src/bad.ts"
 	if [ -e dist ]; then echo "FAIL: js-target build wrote dist/ despite a type error"; exit 1; fi
 )
 
+echo "== explicit any is a build error (needs the extracted compiler API) =="
+# The ban parses with the TypeScript compiler API, loaded in-process from the
+# extracted cache -- the one code path that needs lib/typescript.js rather
+# than the tsc CLI chain. Exercised through the pipe form too, where the
+# bundle has no path of its own to resolve from.
+anydir=$(mktemp -d)
+printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$anydir/ts0.json"
+mkdir -p "$anydir/src"
+printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$anydir/src/main.ts"
+(
+	cd "$anydir"
+	if t0 build; then echo "FAIL: ts0 build succeeded despite an explicit any"; exit 1; fi
+	if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite an explicit any"; exit 1; fi
+	if cat "$TS0JS" | env -i PATH="$CLEAN_PATH" HOME="$HOME" TS0_CACHE_DIR="$TS0_CACHE" \
+		TS0_ESBUILD_URL="$ESBUILD_URL" node - build; then
+		echo "FAIL: piped ts0 built despite an explicit any"; exit 1
+	fi
+	# The same program without the `any` must build -- the ban is the only
+	# thing standing in the way.
+	printf 'export function f(x: number): number {\n\treturn Number(x);\n}\n' > src/main.ts
+	t0 build
+	test -f dist/main.js
+)
+
 echo "== samples/basic (build + test) =="
 (
 	cd "$REPO/samples/basic"
@@ -238,6 +263,7 @@ extractions=$(find "$TS0_CACHE" -mindepth 1 -maxdepth 1 -type d | wc -l)
 test "$extractions" -eq 1
 test -f "$TS0_CACHE"/*/.ts0-extracted
 test -f "$TS0_CACHE"/*/node_modules/typescript/lib/_tsc.js
+test -f "$TS0_CACHE"/*/node_modules/typescript/lib/typescript.js
 test -f "$TS0_CACHE"/*/src/runtime/fetch-interceptor.js
 test -x "$TS0_CACHE"/*/esbuild/esbuild
 

@@ -124,8 +124,13 @@ function stageNatives(esbuildVersion: string): void {
 
 // embeddedFiles collects the text files inlined into ts0.cjs, keyed by their
 // cache-relative extraction path: the pruned typescript package (the tsc CLI
-// chain and standard libraries -- typescript.js, tsserver, and the locale
-// directories are never loaded) and the fetch-interceptor template.
+// chain, the compiler API, and the standard libraries -- tsserver and the
+// locale directories are never loaded) and the fetch-interceptor template.
+//
+// lib/typescript.js is the compiler API, loaded in-process by
+// commands/explicit-any.ts to parse sources for explicit `any`; the CLI chain
+// (bin/tsc -> lib/tsc.js -> lib/_tsc.js) is what the type-check gate spawns.
+// Both are needed: the gate runs tsc exactly as the npm install does.
 function embeddedFiles(): Record<string, string> {
 	const files: Record<string, string> = {};
 	const put = (key: string, from: string): void => {
@@ -135,7 +140,7 @@ function embeddedFiles(): Record<string, string> {
 	put("src/runtime/fetch-interceptor.js", join(repoRoot, "src/runtime/fetch-interceptor.js"));
 
 	const tsDir = dirname(requireLocal.resolve("typescript/package.json"));
-	for (const key of ["package.json", "bin/tsc", "lib/tsc.js", "lib/_tsc.js"]) {
+	for (const key of ["package.json", "bin/tsc", "lib/tsc.js", "lib/_tsc.js", "lib/typescript.js"]) {
 		put(`node_modules/typescript/${key}`, join(tsDir, key));
 	}
 	const libFiles = readdirSync(join(tsDir, "lib")).filter((f) => f.startsWith("lib.") && f.endsWith(".d.ts"));

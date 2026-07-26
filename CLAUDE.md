@@ -23,6 +23,7 @@ src/
         build-html.ts   # bundles an .html entry into a single inlined .html
         build-js.ts     # compiles a directory entry into a parallel .js (+ .d.ts) tree (type-checked)
         esbuild-base.ts # baseEsbuildOptions() shared by build.ts + build-js.ts
+        explicit-any.ts # explicit-`any` ban (parse-based), run inside runTypecheck
         run.ts          # type-check, then build+node (or strip-types+node for --no-build)
         test.ts         # type-check, then node --test on discovered test files
     prebuilt/           # prebuilt ts0.cjs support; see "Prebuilt ts0.cjs"
@@ -80,7 +81,10 @@ CLI end-to-end by:
     `React.createElement`/`React.Fragment` &mdash; the regression guard for the
     "React is not defined" bug where JSX config wasn't threaded into the HTML
     build path. (Both HTML samples also now exercise the type-check on the HTML
-    path, since HTML entries are type-checked rather than skipped.)
+    path, since HTML entries are type-checked rather than skipped.) The
+    component's tagline contains the word "any" as JSX text, and CI asserts it
+    reaches the output &mdash; the guard that the explicit-`any` ban stays a
+    parse and never becomes a text search.
 7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
     the js library target compiled every `src/**/*.ts` to a parallel
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
@@ -116,6 +120,14 @@ CLI end-to-end by:
     It also repeats the check for a **js (directory) target**, proving a type
     error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
     tree.
+11. The "Explicit any is a build error" step: a program that is *valid*
+    TypeScript except for an explicit `any` must fail `build`, `run`,
+    `run --no-build`, and `test`, and emit nothing &mdash; tsc has no flag for
+    this, so a skipped ban would build cleanly and only this step catches it.
+    It walks every spelling (`x: any`, `as any`, `<any>`, `any[]`,
+    `Promise<any>`, `type A = any`, and an `any` inside a `.d.ts`), then
+    proves the look-alikes still build: identifiers, object keys, strings,
+    comments and regexes containing the word `any`.
 
 If you change CLI behavior, update the relevant `samples/*` and CI smoke steps so
 the new behavior is covered.
@@ -171,6 +183,10 @@ single chokepoint, called from every command that emits or executes code:
     `--experimental-strip-types` too, so an un-checked test run would execute an
     invalid program. A type error anywhere in the project fails `ts0 test` and no
     test process is spawned.
+
+The gate is more than `tsc`: it also bans explicit `any` (see "Explicit `any`
+is banned" below), so everything said here about unskippability covers that
+ban too.
 
 There is intentionally **no escape hatch** &mdash; every command that runs or
 emits code type-checks first. If you add a new command (or a new branch in an
@@ -244,6 +260,33 @@ directories listed in the config's `exclude` field (for trees that type-check
 under their own separate tsconfig &mdash; a test harness with different types,
 an experiment dir). `exclude` never changes what gets built, only what the
 gate checks.
+
+### Explicit `any` is banned (unconditionally)
+
+`strict` gives `noImplicitAny`; tsc has **no flag at all** for an *explicit*
+`any`, so ts0 enforces that itself in `commands/explicit-any.ts`, as a second
+pass inside `runTypecheck()` (after tsc, so a syntax error is reported as
+one). Every `any` type annotation is an error &mdash; `x: any`, `x as any`,
+`<any>x`, `any[]`, `Promise<any>`, `type A = any` &mdash; and there is **no
+config option and no escape hatch**: the ban applies even with
+`"strict": false`, exactly like the gate itself. A directory in `exclude` is
+skipped by this pass too (same exclusion list as the gate).
+
+- **It parses; it does not text-search.** `checkNoExplicitAny` loads the
+    TypeScript compiler API (`createRequire(import.meta.url)("typescript")`,
+    same resolution as the tsc binary, memoized) and walks for
+    `SyntaxKind.AnyKeyword`, which only ever occurs as a type. A text search
+    would fail valid builds on identifiers (`anyOf`), object keys, strings,
+    comments, regexes, and JSX prose ("any questions?") &mdash;
+    `samples/html-jsx` carries such a tagline on purpose as the regression
+    guard. Keep it a parse. A cheap `/\bany\b/` pre-filter skips files that
+    can't match, so a project with none never even loads the compiler.
+- **Declaration files are scanned** (unlike the gate, whose `skipLibCheck`
+    means tsc never looks inside a `.d.ts`) &mdash; a hand-written ambient
+    declaration is project source, and it is the easiest place for an `any`
+    to hide.
+- The `.d.ts` files ts0 *emits* live in the output dir, which is excluded, and
+    can't contain an explicit `any` anyway (the sources they come from can't).
 
 ## JSX
 
@@ -437,11 +480,16 @@ How the pieces fit:
 
 - **The bundle** (`src/prebuilt/main.ts` &rarr; `ts0.cjs`): the CLI, the
     esbuild JS API, and the ENTIRE TypeScript compiler (pure JS) in one file.
-    The tsc CLI chain (`bin/tsc`, `lib/tsc.js`, `lib/_tsc.js`) and every
-    `lib/lib.*.d.ts` standard library are embedded as strings via the
-    generated `ts0-prebuilt-assets` virtual module (an esbuild plugin injects
-    it at package time; `src/prebuilt/prebuilt-assets.d.ts` is the ambient
-    declaration that keeps the repo type-check happy without it).
+    The tsc CLI chain (`bin/tsc`, `lib/tsc.js`, `lib/_tsc.js`), the compiler
+    API (`lib/typescript.js`, required in-process by the explicit-`any` pass),
+    and every `lib/lib.*.d.ts` standard library are embedded as strings via
+    the generated `ts0-prebuilt-assets` virtual module (an esbuild plugin
+    injects it at package time; `src/prebuilt/prebuilt-assets.d.ts` is the
+    ambient declaration that keeps the repo type-check happy without it).
+    Embedding both the CLI chain and the API costs ~9 MiB of duplication
+    (~18 MiB total, ~3 MiB gzipped on the wire) and is deliberate: the gate
+    keeps spawning `bin/tsc` exactly as the npm install does, rather than
+    driving the compiler through an internal API to save bytes.
 - **Format is CommonJS, extension is .cjs, and both are load-bearing.**
     `node -` executes stdin as CJS with no flags, which is what keeps the
     pipe form (`curl ... | node - build`) flagless; and a `.js` file would be
@@ -487,8 +535,8 @@ How the pieces fit:
     path must never notice the prebuilt exists.
 - **What must stay in sync when deps bump**: the typescript embed list in
     `embeddedFiles` (the `bin/tsc` &rarr; `lib/tsc.js` &rarr; `lib/_tsc.js`
-    chain is a TypeScript-5.x layout &mdash; the script throws at package
-    time if renamed); the esbuild version is read from the lockfile and baked
+    chain plus `lib/typescript.js` are a TypeScript-5.x layout &mdash; the
+    script throws at package time if renamed); the esbuild version is read from the lockfile and baked
     into both the native-fetch URL and the buildhost project name
     (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
     new natives project on the next master merge.
@@ -497,8 +545,10 @@ How the pieces fit:
     (`env -i`, PATH holds ONLY node; npm/npx asserted unreachable) that
     exercises the real fetch path against a local HTTP server, the
     fetch-failure message, the PIPE form (`cat ts0.cjs | node - build`), the
-    init flow, the type-error gate, every sample assertion incl. declaration
-    determinism, and offline cache reuse; `smoke-prebuilt-linux-arm64`
+    init flow, the type-error gate, the explicit-`any` ban (the only path
+    that loads the extracted `lib/typescript.js`, checked in the pipe form
+    too), every sample assertion incl. declaration determinism, and offline
+    cache reuse; `smoke-prebuilt-linux-arm64`
     repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
     macOS/windows natives ship without a CI execution job on purpose: they
     are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
