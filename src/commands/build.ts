@@ -5,6 +5,7 @@ import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
+import { checkNoExplicitAny } from "./explicit-any.ts";
 
 export interface BuildResult {
 	success: boolean;
@@ -286,10 +287,12 @@ async function runTsc(
 }
 
 // runTypecheck type-checks the project with `tsc --noEmit` using a temporary
-// tsconfig derived from the ts0 config. It is the single source of truth for
-// "does this project type-check"; build() (for build/run) and run() (for the
-// --no-build path) call it before emitting OR executing anything, so it is the
-// chokepoint that makes type-checking unskippable.
+// tsconfig derived from the ts0 config, then bans explicit `any` (see
+// commands/explicit-any.ts -- tsc has no flag for it, so it is a second,
+// parse-only pass over the same file set). It is the single source of truth
+// for "does this project type-check"; build() (for build/run) and run() (for
+// the --no-build path) call it before emitting OR executing anything, so it is
+// the chokepoint that makes type-checking unskippable.
 export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ success: boolean; output: string }> {
 	const nestedProjects = findNestedProjectDirs(rootDir);
 	// A nested project (its own ts0.json) may use different settings -- e.g.
@@ -305,24 +308,32 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	// Nothing to check: a project with no TypeScript sources at all (e.g. a
 	// plain-JS HTML entry). tsc would abort with TS18003 "No inputs were
 	// found", so treat an empty source set as a vacuous pass -- there are no
-	// types that could be broken.
-	if (!hasTypeScriptSources(rootDir, excludeDirs)) {
-		return { success: true, output: "No TypeScript sources to check." };
+	// types that could be broken. (The explicit-`any` pass below still runs:
+	// a project can consist of declaration files only, which don't count as
+	// sources here but can still write `any`.)
+	let output = "No TypeScript sources to check.";
+	if (hasTypeScriptSources(rootDir, excludeDirs)) {
+		const tsconfigContent = {
+			compilerOptions: { ...generatedCompilerOptions(config, rootDir), noEmit: true },
+			// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
+			// TypeScript variants are type-checked too.
+			include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
+			exclude: ["node_modules", ...excludeDirs],
+		};
+
+		const result = await runTsc(rootDir, ".ts0-tsconfig.json", tsconfigContent);
+		if (!result.success) return result;
+		output = result.output || "No type errors found.";
 	}
 
-	const tsconfigContent = {
-		compilerOptions: { ...generatedCompilerOptions(config, rootDir), noEmit: true },
-		// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
-		// TypeScript variants are type-checked too.
-		include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
-		exclude: ["node_modules", ...excludeDirs],
-	};
+	// Explicit `any` is a hard error too -- tsc has no flag for it, so this is
+	// a separate parse-only pass over the same files the gate checks. It runs
+	// after tsc so a syntax error is reported as the syntax error it is,
+	// rather than as whatever a partial parse made of it.
+	const explicitAny = checkNoExplicitAny(rootDir, excludeDirs);
+	if (!explicitAny.success) return explicitAny;
 
-	const result = await runTsc(rootDir, ".ts0-tsconfig.json", tsconfigContent);
-	if (result.success) {
-		return { success: true, output: result.output || "No type errors found." };
-	}
-	return result;
+	return { success: true, output };
 }
 
 // collectAmbientDeclarations returns the project's *.d.ts files (ambient
