@@ -221,7 +221,9 @@ Key details of the generated tsconfig:
     HTML/browser project would fail with "Cannot find name 'document'".
 - **HTML entries ARE type-checked.** (They used to be skipped.) An HTML project's
     `.ts`/`.tsx` files are checked before bundling, so a type error in HTML
-    scripts fails the build like any other project.
+    scripts fails the build like any other project. Do not reintroduce an
+    entry-shaped skip; `samples/html-jsx-typeerror` and the CI step over it exist
+    to keep this honest.
 - **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
     the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
     entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`
