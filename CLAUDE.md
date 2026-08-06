@@ -41,6 +41,8 @@ samples/
     js/                 # directory-entry "js" library target sample (CI)
     userscript/         # iife + globalName + preserveHeader sample (CI)
     bookmarklet/        # HTML entry with a javascript: bookmarklet href (CI)
+tests/
+    html-referenced.dats # dats suite: HTML referenced-assets mode (CI)
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -63,7 +65,13 @@ repo's own `ts0.json` and produces `dist/ts0`.
 npm install
 npm run build                                       # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
+npm link && dats test tests/                        # behavioural suites (needs bwrap)
 ```
+
+Behavioural tests live in `tests/*.dats`, run by
+[dats](https://github.com/wow-look-at-my/dats) &mdash; declarative YAML, tab
+indented, sandboxed. They assert what a build WRITES, so they need the linked
+`ts0` on PATH; CI installs the binary and bubblewrap itself.
 
 The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
 `node --experimental-strip-types --test`), which evaluates the single-file fetch
@@ -86,14 +94,15 @@ CLI end-to-end by:
     component's tagline contains the word "any" as JSX text, and CI asserts it
     reaches the output &mdash; the guard that the explicit-`any` ban stays a
     parse and never becomes a text search.
-7. Running `ts0 build` against `samples/html-referenced` (`inlineAssets: false`)
-    and asserting the multi-file shape: `dist/index.html` plus one bundle per
-    reference under `assetPath`, no `<style>` and no script body in the shell,
-    `src=`/`href=` rewritten to the `/assets/…` URLs with no `./src/` left, the
-    external stylesheet byte-identical to the source, and real bundles (the CSS
-    flattened from both `@import`s, the JS carrying the imported module's
-    string). It then proves a **basename collision** fails the build and leaves
-    no `dist/` at all.
+7. Running the **dats** suite (`dats test tests/`) over `samples/html-referenced`
+    (`inlineAssets: false`): the multi-file shape (`dist/index.html` plus one
+    bundle per reference under `assetPath`), no `<style>` and no script body in
+    the shell, `src=`/`href=` rewritten to the `/assets/…` URLs with no `./src/`
+    left, the external stylesheet untouched, real bundles (CSS flattened from
+    both `@import`s, JS carrying the imported module's string), and a **basename
+    collision** failing the build with nothing written. Each test stages a copy
+    of the sample inside its own sandbox (bwrap, network off), so CI installs
+    bubblewrap and the dats binary before running it.
 8. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
     the js library target compiled every `src/**/*.ts` to a parallel
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
@@ -380,6 +389,8 @@ script/stylesheet to its own file under `assetPath` and rewrites the tag's
     subdirectory under the HTML's out dir. `..` in it is a config error
     (`loadConfig`), not something to sanitize.
 
+Covered by `tests/html-referenced.dats`, not a CI shell step.
+
 ### Interceptor template lookup
 
 `build-html.ts` resolves the interceptor template via two candidate paths so
@@ -499,134 +510,20 @@ Two consumption paths, for two kinds of consumer:
     irrelevant for git installs but matters for `npm publish` &mdash; keep
     `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets
     consumes ts0 this way; the prebuilt machinery must never change this
-    path's behavior (see the npm-path invariant below).
+    path's behavior (see the npm-path invariant in docs/prebuilt-ts0-cjs.md).
 
 ## Prebuilt ts0.cjs (buildhost packaging)
 
 `scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral
-CommonJS file plus five small platform-native esbuild binaries. CI publishes
-them to buildhost on merges to master; consumers run
-`node ts0.cjs <cmd>` (or `curl ... | node - <cmd>`) on stock Node >= 22 with
-no npm. Node is the deliberate prerequisite &mdash; ts0 is a Node tool, and
-hosting duplicated Node runtimes per platform was rejected as waste.
+CommonJS file plus five small platform-native esbuild binaries; CI publishes them
+on merges to master, and consumers run `node ts0.cjs <cmd>` on stock Node >= 22
+with no npm. CommonJS, `.cjs`, and stdin-runnable are all load-bearing; the
+compiler is embedded exactly once; and nothing in shared code may depend on the
+bundle's own path.
 
-How the pieces fit:
-
-- **The bundle** (`src/prebuilt/main.ts` &rarr; `ts0.cjs`): the CLI, the
-    esbuild JS API, and the ENTIRE TypeScript compiler (pure JS) in one file.
-    The compiler API (`lib/typescript.js`) and every `lib/lib.*.d.ts`
-    standard library are embedded as strings via the generated
-    `ts0-prebuilt-assets` virtual module (an esbuild plugin injects it at
-    package time; `src/prebuilt/prebuilt-assets.d.ts` is the ambient
-    declaration that keeps the repo type-check happy without it). ~12 MiB
-    total, ~2 MiB gzipped on the wire.
-- **The compiler is embedded ONCE.** The npm package ships it twice --
-    `lib/typescript.js` (the API) and `lib/_tsc.js` (the same compiler
-    rebuilt as a CLI, reached through `bin/tsc` &rarr; `lib/tsc.js`) -- and
-    ts0 needs both capabilities: the gate spawns the CLI, and the
-    explicit-`any` pass requires the API in-process. Embedding both would add
-    ~9 MiB of duplicated compiler, so only the API ships and
-    `scripts/build-prebuilt.ts` GENERATES `bin/tsc` (`TSC_DRIVER`) doing what
-    `_tsc.js` does at its tail: enable the compile cache, `sys.setBlocking()`
-    (so a piped diagnostic dump can't be truncated), then
-    `executeCommandLine(sys, noop, sys.args)`. Verified identical to the
-    stock CLI on diagnostics text, exit codes, and declaration-emit bytes,
-    and `runTsc` still spawns `node <bin/tsc> --project ...` unchanged, so
-    the gate behaves exactly as it does on the npm path. `executeCommandLine`
-    is a runtime export absent from `typescript.d.ts`: the packaging script
-    asserts it exists, and the boot sanity runs a real failing + passing
-    build through the driver, so a TypeScript upgrade that moved it breaks
-    packaging rather than a consumer's first run.
-- **Format is CommonJS, extension is .cjs, and both are load-bearing.**
-    `node -` executes stdin as CJS with no flags, which is what keeps the
-    pipe form (`curl ... | node - build`) flagless; and a `.js` file would be
-    mis-parsed as ESM inside any consumer package declaring
-    `"type": "module"` (including this repo). Do not rename the artifact to
-    `.js` or switch the bundle to ESM without solving both.
-- **Stdin-runnable invariant: nothing may depend on the bundle's own path.**
-    Under `node -`, `__filename` is `[stdin]` and there is no
-    `import.meta.url`. The packaging `define`s `import.meta.url` to
-    `globalThis.__ts0PrebuiltImportMetaUrl`, which `runtime.ts` points at
-    `<cache>/<build-id>/dist/ts0` &mdash; so build.ts's
-    `createRequire(...).resolve("typescript/bin/tsc")` finds the EXTRACTED
-    compiler under `<cache>/node_modules/typescript`, and build-html.ts's
-    `../src/runtime/fetch-interceptor.js` candidate finds the extracted
-    template, with zero source changes. If you add a new
-    `__filename`/`__dirname`/`import.meta.url` use to shared code, it must
-    resolve via that anchor (or the cache), never via the bundle's location.
-    (The bundled esbuild lib references `__filename` only on error paths that
-    `ESBUILD_BINARY_PATH` short-circuits.)
-- **Extraction** (`src/prebuilt/runtime.ts`): first run writes the embedded
-    files to `$TS0_CACHE_DIR`-or-`~/.cache/ts0/<build-id>/` (atomic
-    temp+rename; concurrent racers use the winner's tree). The build id is a
-    hash of the final bundle + dependency versions (placeholder-substituted
-    after bundling), so any change extracts fresh and upgrades never collide.
-    tsc then runs exactly as in the npm build: `node <extracted tsc>
-    --project ...` &mdash; `node` is on PATH by prerequisite, so `ts0 run` /
-    `ts0 test` need no changes at all.
-- **The one native piece: esbuild.** `ensureEsbuildBinary` fetches the
-    platform's native binary (~11 MB) from
-    `https://dl.pazer.build/ts0/esbuild-<version>?os=..&arch=..` into the
-    cache (atomic, once) and exports `ESBUILD_BINARY_PATH` BEFORE the CLI
-    (and therefore the bundled esbuild module, which snapshots that env var
-    at load time) is imported &mdash; keep that ordering. A set-and-existing
-    `ESBUILD_BINARY_PATH` is respected as a user override; `TS0_ESBUILD_URL`
-    overrides the fetch URL (mirrors/tests). Fetch failures name the URL and
-    destination &mdash; never a silent fallback. The natives come from the
-    npm registry tarballs, verified against the package-lock sha512, so they
-    are byte-identical to what npm installs; there is no esbuild-wasm
-    fallback (deliberate &mdash; not worth the weight).
-- **npm-path invariant**: the prebuilt machinery lives entirely in
-    `src/prebuilt/` + the packaging script. The only shared-source change is
-    quoting in `runTsc`'s exec string (spaced paths). The npm/git-install
-    path must never notice the prebuilt exists.
-- **What must stay in sync when deps bump**: the typescript embed list in
-    `embeddedFiles` (`lib/typescript.js` + `lib/lib.*.d.ts` is a
-    TypeScript-5.x layout, and the generated `bin/tsc` driver depends on the
-    `executeCommandLine` runtime export &mdash; the script throws at package
-    time if either moves); the esbuild version is read from the lockfile and baked
-    into both the native-fetch URL and the buildhost project name
-    (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
-    new natives project on the next master merge.
-- **CI/publish** (`.github/workflows/ci.yml`): the `prebuilt` job builds
-    everything and runs `scripts/prebuilt-smoke.sh` &mdash; a bare-node smoke
-    (`env -i`, PATH holds ONLY node; npm/npx asserted unreachable) that
-    exercises the real fetch path against a local HTTP server, the
-    fetch-failure message, the PIPE form (`cat ts0.cjs | node - build`), the
-    init flow, the type-error gate, the explicit-`any` ban (the pass that
-    requires the extracted `lib/typescript.js` in-process, checked in the
-    pipe form too), the extracted tree's shape (API + generated `bin/tsc`,
-    and NO `_tsc.js` &mdash; the no-duplicated-compiler assertion), every
-    sample assertion incl. declaration determinism, and offline cache reuse; `smoke-prebuilt-linux-arm64`
-    repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
-    macOS/windows natives ship without a CI execution job on purpose: they
-    are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
-    is platform-neutral. The `publish` job (master only) is the STOCK
-    `wow-look-at-my/buildhost/.github/actions/buildhost-publish@master`
-    action with `artifact_name: prebuilt` &mdash; no inline publish
-    scripting; if the action ever lacks something, fix it upstream in the
-    buildhost repo, never with a hand-rolled step here. It self-serves the
-    run artifact and runs a pre-publish guard that scans the run's jobs and
-    the head commit's check runs (hence `actions: read` + `checks: read`
-    &mdash; the guard fails closed without both), authenticates via GHA OIDC
-    (`id-token: write`; buildhost auto-provisions the projects, public
-    because this repo is public), and maps files by naming convention:
-    `ts0_cosmo_any` &rarr; project `ts0`, one artifact under the cosmo/any
-    multi-platform alias (one stored body, resolvable under every
-    `?os=..&arch=..` pair); `esbuild-<version>_<os>_<arch>[.exe]` &rarr;
-    project `ts0/esbuild-<version>`. Each master merge creates a new release
-    of BOTH projects (the natives' bytes are identical across re-publishes
-    of the same esbuild version, and ts0.cjs's version-less fetch URL always
-    resolves the latest); `scripts/build-prebuilt.ts` owns the naming, so a
-    rename there is a publish-layout change. PR branches build and smoke but
-    never publish.
-- **Org merge gate / job naming**: merging into master needs a green
-    `all-builds` commit status on the PR head SHA, posted automatically by
-    an org app (required-builds-manager) that aggregates every build on the
-    SHA &mdash; no special CI job naming is needed for the gate. Never name
-    a job `all-builds`: the buildhost publish actions fail any run whose
-    SHA carries a job by that name (the error says to rename); use a
-    neutral name like `aggregate` if a fan-in job is ever wanted.
+- docs/prebuilt-ts0-cjs.md -- the whole contract: bundle contents, the generated
+    `bin/tsc` driver, cache extraction, the esbuild native fetch, the npm-path
+    invariant, what must stay in sync on a dependency bump, and CI/publish.
 
 ## Documentation
 

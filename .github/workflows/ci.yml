@@ -200,46 +200,23 @@ jobs:
           # component builds and its tagline reaches the output.
           grep -q 'any questions' dist/index.html
 
-      - name: Test html-referenced sample (inlineAssets false)
-        working-directory: samples/html-referenced
+      # go-toolchain bundles dats and runs .dats suites itself, but it
+      # hard-requires a go.mod and this repo is TypeScript, so the binary is
+      # fetched directly -- a public buildhost download needing no auth.
+      # bubblewrap is dats native Linux backend; without it dats falls back to
+      # docker, where commands run inside the image and lose the linked ts0 and
+      # node. ubuntu denies unprivileged user namespaces by default, so the
+      # sysctl is what makes bwrap usable.
+      - name: Install dats
         run: |
-          ts0 build
-          # A multi-file static site: the shell plus one bundle per reference,
-          # written under assetPath.
-          test -f dist/index.html
-          test -f dist/assets/main.js
-          test -f dist/assets/app.css
-          # Nothing is inlined -- no <style>, exactly one <script> and it is an
-          # empty src= tag, and no application source text in the shell.
-          ! grep -q '<style' dist/index.html
-          test "$(grep -c '<script' dist/index.html)" -eq 1
-          grep -q '<script type="module" src="/assets/main.js"></script>' dist/index.html
-          ! grep -q 'REFERENCED_BUNDLE_MARKER' dist/index.html
-          ! grep -q 'getElementById' dist/index.html
-          # References were rewritten to assetPath; no source path survives.
-          grep -q 'href="/assets/app.css"' dist/index.html
-          ! grep -q './src/' dist/index.html
-          # The external stylesheet is exactly as authored.
-          grep -q '<link rel="stylesheet" href="https://example.com/theme.css" />' dist/index.html
-          # The bundles are real bundles, not copies: the CSS is flattened from
-          # both @imports, the JS carries the imported module's string.
-          grep -q 'letter-spacing: 0.04em' dist/assets/app.css
-          grep -q 'backdrop-filter: blur(3px)' dist/assets/app.css
-          ! grep -q '@import' dist/assets/app.css
-          grep -q 'REFERENCED_BUNDLE_MARKER' dist/assets/main.js
-          # Two sources with the same basename want the same output file: that
-          # is a build error naming both, and NOTHING is written.
-          dir=$(mktemp -d)
-          cp -r . "$dir/proj"
-          cd "$dir/proj"
-          rm -rf dist
-          mkdir -p src/other
-          printf 'export const extra: number = 1;\nconsole.log(extra);\n' > src/other/main.ts
-          printf '%s\n' '<script type="module" src="./src/other/main.ts"></script>' >> index.html
-          if ts0 build; then echo "FAIL: colliding output basenames built"; exit 1; fi
-          if [ -e dist ]; then echo "FAIL: collision left output behind"; exit 1; fi
-          ts0 build 2>&1 | grep -q 'both bundle to "main.js"'
-          echo "Referenced-assets OK: bundles emitted, nothing inlined, collision refused"
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          curl -fL --compressed "https://dl.pazer.build/dats?os=linux&arch=amd64" -o /usr/local/bin/dats
+          chmod +x /usr/local/bin/dats
+          dats --version
+
+      - name: Referenced-assets behaviour (dats)
+        run: dats test tests/
 
       - name: Test js sample
         working-directory: samples/js
