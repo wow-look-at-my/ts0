@@ -25,6 +25,7 @@ shared:
 				root="$(dirname "$1")"
 				cp -r samples/html-referenced/. "$root/"
 				rm -rf "$root/dist"
+				[ -d "$PWD/node_modules" ] && ln -s "$PWD/node_modules" "$root/node_modules"
 				cd "$root"
 			}
 
