@@ -169,7 +169,9 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
 ## How it works
 
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your
-    `ts0.json`, then bundles with esbuild.
+    `ts0.json`, then bundles with esbuild. Every entry is type-checked, HTML
+    included; a project with no TypeScript files at all is reported as skipped
+    rather than silently passed.
 - **Run:** with `--no-build`, `ts0 run` shells out to `node --experimental-strip-types`
     to execute TypeScript directly &mdash; no build step in the dev loop.
 - **Test:** test files are discovered via the configured glob and handed to

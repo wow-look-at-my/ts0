@@ -158,14 +158,15 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 	const { config: loaded, rootDir } = loadConfig();
 	const config = applyOverrides(loaded, overrides);
 
-	// Skip type-checking for HTML entries: an HTML project may have no .ts
-	// files at all (it can be plain JS), and the bundling step delegates to
-	// esbuild's stdin/css loaders which don't honour TypeScript types
-	// anyway. The entry's <script src> targets are still type-checked
-	// transitively if they're .ts files via the bundler.
-	if (isHtmlEntry(config.entry)) {
-		return { success: true, output: "Skipped (HTML entry)." };
-	}
+	// NOTE: an HTML entry is type-checked like any other. It used to be skipped
+	// outright, on the grounds that an HTML project may be plain JS with no .ts
+	// files at all — but the skip returned SUCCESS, so every such project got a
+	// "Type-checking..." line and a green build with nothing checked, and the
+	// claim that the entry's <script src> targets are "type-checked
+	// transitively via the bundler" is not true of esbuild, which strips types
+	// without checking them. The genuine no-TypeScript case is handled where it
+	// actually shows up: tsc reports TS18003 for it, and only that is reported
+	// as a skip, below.
 
 	// Generate a temporary tsconfig based on ts0 config. When JSX is enabled,
 	// thread the matching tsc options and widen the include glob so .tsx files
@@ -223,9 +224,14 @@ export async function typecheck(overrides?: BuildOverrides): Promise<{ success: 
 		}
 	} catch (err) {
 		const error = err as { stdout?: string; stderr?: string };
-		return {
-			success: false,
-			output: error.stdout || error.stderr || String(err),
-		};
+		const output = error.stdout || error.stderr || String(err);
+		// TS18003: the config matched no input files. That is the plain-JS
+		// project (typically an HTML entry with no .ts anywhere), not a type
+		// error — the one case where "nothing was checked" is the right answer,
+		// and it says so rather than pretending it checked.
+		if (output.includes("TS18003")) {
+			return { success: true, output: "Skipped (no TypeScript files to check)." };
+		}
+		return { success: false, output };
 	}
 }

@@ -104,6 +104,15 @@ defaults plus auto-detected entry. Don't break the no-config-file path.
 is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
 project doesn't need its own `typescript` install. Preserve both behaviors.
 
+**Every entry is type-checked, HTML included.** An HTML entry used to return
+success without checking anything ("Skipped (HTML entry)"), which made the
+`Type-checking...` line a lie for every HTML project — a check that cannot go
+red is worse than none, because it is believed. The case that skip was really
+for — a plain-JS HTML project with no `.ts` anywhere — is handled where it shows
+up: `tsc` reports `TS18003` (no inputs matched), and only that is reported as a
+skip. Do not reintroduce an entry-shaped skip; `samples/html-jsx-typeerror` and
+the CI step over it exist to keep this honest.
+
 The generated tsconfig excludes nested ts0 projects (any subdirectory with its
 own `ts0.json`, via `findNestedProjectDirs`). Without this, building ts0 itself
 would type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
