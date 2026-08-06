@@ -360,6 +360,19 @@ jobs:
           test -f dist/main.js
           echo "exclude OK: gate skipped the excluded dir, build unchanged"
 
+      # An HTML entry is type-checked like any other. This sample does not
+      # type-check, so the build MUST fail: HTML entries were once exempt and
+      # reported success regardless, which shipped type errors to the browser
+      # behind a "Type-checking..." line that had checked nothing.
+      - name: Type errors in an HTML entry fail the build
+        working-directory: samples/html-jsx-typeerror
+        run: |
+          if ts0 build; then
+            echo "::error::ts0 build succeeded on a project with a type error - HTML entries are being skipped again"
+            exit 1
+          fi
+          ts0 build 2>&1 | grep -q 'TS2322'
+
       - name: Upload html sample build
         if: always()
         uses: actions/upload-artifact@v4
