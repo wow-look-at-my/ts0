@@ -8,6 +8,7 @@
 	},
 	"scripts": {
 		"build": "node --experimental-strip-types src/cli.ts build",
+		"build:prebuilt": "node --experimental-strip-types scripts/build-prebuilt.ts",
 		"prepare": "npm run build",
 		"prepublishOnly": "npm run build"
 	},
@@ -16,7 +17,7 @@
 		"src/runtime/fetch-interceptor.js"
 	],
 	"dependencies": {
-		"esbuild": "^0.25.0",
+		"esbuild": "^0.28.1",
 		"typescript": "^5.7.0"
 	},
 	"devDependencies": {
