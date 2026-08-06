@@ -92,7 +92,7 @@ export async function buildHtml(
 		? resolve(rootDir, config.outfile)
 		: resolve(rootDir, config.outdir || "dist", basename(config.entry));
 
-	const buildOnce = async (): Promise<{ errors: string[] }> => {
+	const buildOnce = async (): Promise<{ errors: string[]; outputs: string[] }> => {
 		// In watch mode build() can't gate up front (later rebuilds would slip
 		// past), so it hands us the type-check to run before each rebuild. If it
 		// fails we report the errors and write nothing -- the previous good
@@ -101,14 +101,22 @@ export async function buildHtml(
 		if (options?.typecheck) {
 			const check = await options.typecheck();
 			if (!check.success) {
-				return { errors: [`Type-checking failed:\n${check.output}`] };
+				return { errors: [`Type-checking failed:\n${check.output}`], outputs: [] };
 			}
 		}
 		const html = readFileSync(htmlPath, "utf-8");
-		const result = await processHtml(html, htmlSourceDir, rootDir, config);
+		const result = await processHtml(html, htmlSourceDir, rootDir, config, dirname(outFile));
+		// Nothing is written when the pass had errors: a new HTML pointing at
+		// bundles that were never emitted (or stale bundles beside a new shell)
+		// is worse than leaving the previous good output in place.
+		if (result.errors.length) return { errors: result.errors, outputs: [] };
+		for (const asset of result.assets) {
+			mkdirSync(dirname(asset.path), { recursive: true });
+			writeFileSync(asset.path, asset.contents);
+		}
 		mkdirSync(dirname(outFile), { recursive: true });
 		writeFileSync(outFile, result.html);
-		return { errors: result.errors };
+		return { errors: [], outputs: [outFile, ...result.assets.map((a) => a.path)] };
 	};
 
 	if (options?.watch) {
@@ -135,17 +143,17 @@ export async function buildHtml(
 		console.log("Watching for changes...");
 		return {
 			success: true,
-			outputFiles: [outFile],
+			outputFiles: initial.outputs,
 			errors: [],
 			duration: performance.now() - startTime,
 		};
 	}
 
-	const { errors } = await buildOnce();
+	const { errors, outputs } = await buildOnce();
 
 	return {
 		success: errors.length === 0,
-		outputFiles: [outFile],
+		outputFiles: outputs,
 		errors,
 		duration: performance.now() - startTime,
 	};
@@ -153,7 +161,7 @@ export async function buildHtml(
 
 let rebuildPending = false;
 async function rebuild(
-	buildOnce: () => Promise<{ errors: string[] }>,
+	buildOnce: () => Promise<{ errors: string[]; outputs: string[] }>,
 	filename: string,
 ): Promise<void> {
 	if (rebuildPending) return;
@@ -177,9 +185,24 @@ async function rebuild(
 	}, 50);
 }
 
+interface EmittedAsset {
+	path: string;
+	contents: Uint8Array;
+}
+
 interface ProcessResult {
 	html: string;
 	errors: string[];
+	// Files the caller must write alongside the HTML. Always empty in inline
+	// mode (inlineAssets defaults to true).
+	assets: EmittedAsset[];
+}
+
+// Output basename for a referenced source: its own basename with the bundled
+// extension (src/main.ts -> main.js). Deterministic and hash-free -- the
+// serving side owns cache headers and ETags.
+function assetOutputName(sourcePath: string, ext: string): string {
+	return basename(sourcePath).replace(/\.[^.]*$/, "") + ext;
 }
 
 async function processHtml(
@@ -187,9 +210,52 @@ async function processHtml(
 	sourceDir: string,
 	rootDir: string,
 	config: Ts0Config,
+	outDir: string,
 ): Promise<ProcessResult> {
 	const errors: string[] = [];
 	const replacements: Array<{ match: string; replacement: string }> = [];
+	const assets: EmittedAsset[] = [];
+
+	// Referenced mode: every referenced script/stylesheet is bundled to its own
+	// file under assetPath and the tag keeps pointing at it. assetPath is the
+	// URL prefix verbatim; the same string without a leading `/` or `./` is the
+	// subdirectory under the HTML's output directory.
+	const referenced = config.inlineAssets === false;
+	const assetUrlPrefix = (config.assetPath ?? "assets").replace(/\/+$/, "");
+	const assetDir = resolve(outDir, assetUrlPrefix.replace(/^(?:\.?\/)+/, ""));
+
+	// Output path -> the source that claimed it. Two sources with the same
+	// basename want the same output file; that is an error naming both, never a
+	// silent overwrite and never an invented suffix.
+	const assetOwners = new Map<string, string>();
+	const claimAsset = (name: string, source: string): string | null => {
+		const path = join(assetDir, name);
+		const owner = assetOwners.get(path);
+		if (owner) {
+			errors.push(
+				`${relative(rootDir, owner)} and ${relative(rootDir, source)} both bundle to "${name}" under assetPath "${assetUrlPrefix}" -- rename one of them.`,
+			);
+			return null;
+		}
+		assetOwners.set(path, source);
+		return path;
+	};
+	// Every output file, not just the first: an entry that imports CSS makes
+	// esbuild emit a companion .css beside the JS, and dropping it ships an
+	// unstyled page.
+	const collectOutputs = (files: esbuild.OutputFile[] | undefined, source: string): void => {
+		for (const file of files ?? []) {
+			const owner = assetOwners.get(file.path);
+			if (owner && owner !== source) {
+				errors.push(
+					`${relative(rootDir, owner)} and ${relative(rootDir, source)} both write "${basename(file.path)}" under assetPath "${assetUrlPrefix}" -- rename one of them.`,
+				);
+				continue;
+			}
+			assetOwners.set(file.path, source);
+			assets.push({ path: file.path, contents: file.contents });
+		}
+	};
 
 	// <script ...>...</script> — three cases handled below:
 	//   1. <script src="local.js"> — bundle the file at src.
@@ -222,10 +288,21 @@ async function processHtml(
 		};
 
 		let entryDescription: string;
+		let referencedName: string | null = null;
 		if (attrs.src) {
 			if (isExternal(attrs.src)) continue;
 			entryDescription = resolve(sourceDir, attrs.src);
 			buildOpts.entryPoints = [entryDescription];
+			if (referenced) {
+				referencedName = assetOutputName(entryDescription, ".js");
+				// esbuild is told the real output path rather than being asked
+				// for bytes we place ourselves: companion files (a .css emitted
+				// for an entry that imports CSS) are only named correctly when
+				// it knows where the entry lands.
+				const outPath = claimAsset(referencedName, entryDescription);
+				if (!outPath) continue;
+				buildOpts.outfile = outPath;
+			}
 		} else if (isModule && inlineBody.trim()) {
 			entryDescription = "<inline module>";
 			buildOpts.stdin = {
@@ -243,6 +320,16 @@ async function processHtml(
 
 			if (result.errors.length > 0) {
 				errors.push(...result.errors.map((e) => formatEsbuildMessage(e)));
+				continue;
+			}
+
+			if (referencedName) {
+				collectOutputs(result.outputFiles, entryDescription);
+				const rewritten = { ...attrs, src: `${assetUrlPrefix}/${referencedName}` };
+				replacements.push({
+					match: fullMatch,
+					replacement: `<script ${formatAttrs(rewritten)}>${inlineBody}</script>`,
+				});
 				continue;
 			}
 
@@ -271,6 +358,15 @@ async function processHtml(
 
 		const filePath = resolve(sourceDir, attrs.href);
 
+		let referencedName: string | null = null;
+		let outfile: string | undefined;
+		if (referenced) {
+			referencedName = assetOutputName(filePath, ".css");
+			const outPath = claimAsset(referencedName, filePath);
+			if (!outPath) continue;
+			outfile = outPath;
+		}
+
 		try {
 			const result = await esbuild.build({
 				entryPoints: [filePath],
@@ -281,11 +377,23 @@ async function processHtml(
 				write: false,
 				logLevel: "silent",
 				loader: CSS_ASSET_LOADERS,
+				...(outfile && { outfile }),
 				...config.esbuild,
 			});
 
 			if (result.errors.length > 0) {
 				errors.push(...result.errors.map((e) => formatEsbuildMessage(e)));
+				continue;
+			}
+
+			if (referencedName) {
+				collectOutputs(result.outputFiles, filePath);
+				const rewritten = { ...attrs, href: `${assetUrlPrefix}/${referencedName}` };
+				const selfClosing = /\/\s*>$/.test(fullMatch);
+				replacements.push({
+					match: fullMatch,
+					replacement: `<link ${formatAttrs(rewritten)}${selfClosing ? " /" : ""}>`,
+				});
 				continue;
 			}
 
@@ -367,15 +475,15 @@ async function processHtml(
 	// if no embeddable assets exist next to the entry — keeps trivial HTML
 	// samples (no shaders, no HDR) byte-identical to pre-feature output.
 	if (config.embedAssets !== false) {
-		const assets = config.assetDirs
+		const embedded = config.assetDirs
 			? collectAssetsFromDirs(rootDir, config.assetDirs)
 			: collectAssets(sourceDir);
-		if (Object.keys(assets.text).length || Object.keys(assets.binary).length) {
-			result = injectFetchInterceptor(result, assets);
+		if (Object.keys(embedded.text).length || Object.keys(embedded.binary).length) {
+			result = injectFetchInterceptor(result, embedded);
 		}
 	}
 
-	return { html: result, errors };
+	return { html: result, errors, assets };
 }
 
 interface AssetMap {

@@ -37,6 +37,7 @@ samples/
     basic/              # Node-entry smoke-test sample exercised by CI
     html/               # HTML-entry smoke-test sample exercised by CI
     html-jsx/           # HTML+JSX (Preact, automatic runtime) regression sample
+    html-referenced/    # HTML entry with inlineAssets:false -> multi-file site (CI)
     js/                 # directory-entry "js" library target sample (CI)
     userscript/         # iife + globalName + preserveHeader sample (CI)
     bookmarklet/        # HTML entry with a javascript: bookmarklet href (CI)
@@ -85,7 +86,15 @@ CLI end-to-end by:
     component's tagline contains the word "any" as JSX text, and CI asserts it
     reaches the output &mdash; the guard that the explicit-`any` ban stays a
     parse and never becomes a text search.
-7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+7. Running `ts0 build` against `samples/html-referenced` (`inlineAssets: false`)
+    and asserting the multi-file shape: `dist/index.html` plus one bundle per
+    reference under `assetPath`, no `<style>` and no script body in the shell,
+    `src=`/`href=` rewritten to the `/assets/…` URLs with no `./src/` left, the
+    external stylesheet byte-identical to the source, and real bundles (the CSS
+    flattened from both `@import`s, the JS carrying the imported module's
+    string). It then proves a **basename collision** fails the build and leaves
+    no `dist/` at all.
+8. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
     the js library target compiled every `src/**/*.ts` to a parallel
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
     chunk (the shared body appears in exactly one output file, not copied into
@@ -97,7 +106,7 @@ CLI end-to-end by:
     not copied, no `.d.ts.map`, and byte-identical `.d.ts` across a rebuild
     (determinism). A follow-up step proves `"declarations": false` opts out
     (`.js` emitted, zero `.d.ts`).
-8. Running `ts0 build` against `samples/userscript` and asserting the
+9. Running `ts0 build` against `samples/userscript` and asserting the
     userscript-bundling features: the `==UserScript==` header re-prepended
     byte-exactly at the top (exactly once, stable across a rebuild &mdash;
     `preserveHeader`), the IIFE assigned to the configured `globalName`, no
@@ -106,12 +115,12 @@ CLI end-to-end by:
     gate-check with bundler resolution) and inlined. Follow-up steps prove
     `--config <path>` builds the sample from the repo root and that the
     `exclude` config skips a broken directory the gate would otherwise fail on.
-9. Running `ts0 build` against `samples/bookmarklet` and asserting the
+10. Running `ts0 build` against `samples/bookmarklet` and asserting the
     `javascript:<file>` href was replaced by a percent-encoded minified
     bundle that decodes back to the program (lib import inlined), while a
     real `javascript:void(0)` href and the rest of the page stay untouched
     and no fetch interceptor is injected.
-10. The "Type-check gate blocks broken output" step: a project with a deliberate
+11. The "Type-check gate blocks broken output" step: a project with a deliberate
     type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
     `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
     nothing (no `dist/`, no test run). The error strips to valid JS and the test
@@ -120,7 +129,7 @@ CLI end-to-end by:
     It also repeats the check for a **js (directory) target**, proving a type
     error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
     tree.
-11. The "Explicit any is a build error" step: a program that is *valid*
+12. The "Explicit any is a build error" step: a program that is *valid*
     TypeScript except for an explicit `any` must fail `build`, `run`,
     `run --no-build`, and `test`, and emit nothing &mdash; tsc has no flag for
     this, so a skipped ban would build cleanly and only this step catches it.
@@ -347,6 +356,29 @@ on the script/link (other than `src`/`href`/`rel`/`type`) are preserved.
 
 Keep the HTML parser regex-based and dependency-free &mdash; do not add an HTML
 parser package.
+
+### Referenced assets (`inlineAssets: false`)
+
+`"inlineAssets": false` (HTML entries only) bundles each referenced local
+script/stylesheet to its own file under `assetPath` and rewrites the tag's
+`src`/`href` instead of inlining. Load-bearing invariants:
+
+- **The default is unchanged inline mode.** `inlineAssets` absent or `true`
+    emits exactly the same bytes as before; `assets` comes back empty from
+    `processHtml` and no other code path differs.
+- **Output name = source basename + bundled extension**, no content hash
+    (`src/main.ts` &rarr; `main.js`). Two sources that want the same name are a
+    **build error naming both** &mdash; never an overwrite, never an invented
+    suffix.
+- **Nothing is written when the pass has errors.** `buildOnce` returns before
+    writing the HTML or any asset, so a new shell can never point at bundles
+    that were not emitted (and in watch mode the previous good output stays).
+- **esbuild is given the `outfile`**, and *every* `outputFiles` entry is
+    written &mdash; an entry that imports CSS makes esbuild emit a companion
+    `.css`, which only lands beside the JS if esbuild knows the real path.
+- `assetPath` is the URL prefix verbatim; minus a leading `/` or `./` it is the
+    subdirectory under the HTML's out dir. `..` in it is a config error
+    (`loadConfig`), not something to sanitize.
 
 ### Interceptor template lookup
 
