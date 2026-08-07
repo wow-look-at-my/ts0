@@ -74,10 +74,16 @@ npm link && dats test tests/                        # behavioural suites (needs 
 The suites need the linked `ts0` on PATH (hence `npm link`) and bubblewrap for
 the sandbox; `.dats` files are tab-indented YAML.
 
-The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
-`node --experimental-strip-types --test`), which evaluates the single-file fetch
-interceptor against a window/document shim and asserts it serves embedded assets
-for string, `URL`-object, and `Request` fetch inputs.
+Unit tests are every `src/**/*.test.ts`, run in CI by one globbed
+`node --experimental-strip-types --test "src/**/*.test.ts"` step, so a new test
+file is picked up without touching the workflow:
+
+- `src/runtime/fetch-interceptor.test.ts` evaluates the single-file fetch
+    interceptor against a window/document shim and asserts it serves embedded
+    assets for string, `URL`-object, and `Request` fetch inputs.
+- `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
+    temp projects and pins the gate's file set: a type error in the configured
+    entry fails the gate whether or not the entry sits in a dot-directory.
 
 Everything else is a **behavioural suite** in `tests/*.dats`, run by
 [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
@@ -94,8 +100,9 @@ in place.
     elsewhere in the tree (rootDir stays the config file's own directory).
 - `tests/gate.dats` -- the unskippable gate. A type error must make **every**
     path (`build`, `run`, `run --no-build`, `test`) exit non-zero and emit or
-    execute nothing, for the node target and the js (directory) target alike
-    (no `.js` tree, no partial `.d.ts`). The fixtures are shaped so a skipped
+    execute nothing, for the node target, the js (directory) target (no `.js`
+    tree, no partial `.d.ts`) and an entry under a **dot-directory** alike --
+    the last one is the case tsc's `**/*` never reaches on its own. The fixtures are shaped so a skipped
     check would look fine: the error strips to valid JS and the test file
     registers no tests, so `--no-build` and `test` would exit 0 if the gate were
     bypassed. Then the explicit-`any` ban across every spelling (`x: any`,
@@ -221,8 +228,16 @@ Key details of the generated tsconfig:
 - **HTML entries ARE type-checked.** (They used to be skipped.) An HTML project's
     `.ts`/`.tsx` files are checked before bundling, so a type error in HTML
     scripts fails the build like any other project. Do not reintroduce an
-    entry-shaped skip; `samples/html-jsx-typeerror` and the CI step over it exist
-    to keep this honest.
+    entry-shaped skip; `samples/html-jsx-typeerror` and the `tests/gate.dats`
+    test over it exist to keep this honest.
+- **The configured entry is named in `include`, not just globbed**
+    (`entryTypeCheckPaths`). tsc skips dot-directories while expanding a leading
+    wildcard but never a path segment it was handed, so without this an entry
+    under `.github/`, `.config/`, … is bundled against an EMPTY program and the
+    build reports success. A directory entry yields one glob per TS extension,
+    but only when it actually holds TypeScript &mdash; globs matching nothing
+    would abort with TS18003 instead of letting build-js report "No TypeScript
+    modules found". An HTML entry yields none (its scripts come from the markup).
 - **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
     the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
     entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`

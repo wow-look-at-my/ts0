@@ -84,6 +84,35 @@ tests:
 			dist/good.js:
 			dist/good.d.ts:
 
+	# tsc's `**/*` never descends into a dot-directory, so an entry living in one
+	# was bundled against an EMPTY program and the build reported success. The
+	# gate names the configured entry for exactly this reason.
+	- desc: "an entry under a dot-directory is type-checked like any other"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			ts0.json: |
+				{ "entry": ".github/scripts/step.ts", "outfile": "out/step.js", "target": "node" }
+			.github/scripts/step.ts: |
+				const n: number = "nope";
+				export { n };
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				# dats creates the parent of every declared !files entry, so
+				# out/ exists before the build does anything; drop it first or
+				# the check below asserts dats' own artifact.
+				rm -rf out
+				if ts0 build; then echo "FAIL: entry under a dot-directory built despite a type error"; exit 1; fi
+				if [ -e out ]; then echo "FAIL: entry under a dot-directory wrote out/"; exit 1; fi
+				echo "dot-directory entry gate OK: type-checked like any other entry" | tee "$1"
+	  outputs:
+		stdout:
+			- "dot-directory entry gate OK"
+		"!files":
+			out/step.js:
+
 	- desc: "an explicit any refuses build, run, run --no-build and test"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
 	  inputs:

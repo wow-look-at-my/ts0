@@ -397,8 +397,9 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
 - **Type-checking is mandatory &mdash; there is no way to build, run, or test
     un-checked code.** `ts0` type-checks before it emits *or executes* anything.
     `build`, `run`, and `test` all check first &mdash; for every entry kind
-    (`.ts`, `.html`, and the directory/js library target) &mdash; and produce/run
-    nothing if the check fails. Even
+    (`.ts`, `.html`, and the directory/js library target), wherever the entry
+    lives, including under a dot-directory like `.github/scripts/` &mdash; and
+    produce/run nothing if the check fails. Even
     `ts0 run --no-build`, which skips the bundle and writes no artifact,
     type-checks first: Node's `--experimental-strip-types` only strips annotations
     (it does not type-check), so ts0 runs `tsc` itself before handing sources to

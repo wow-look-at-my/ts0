@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -16,8 +16,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Unit tests (runtime fetch interceptor)
-        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+      - name: Unit tests
+        run: node --experimental-strip-types --test "src/**/*.test.ts"
 
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
@@ -30,7 +30,7 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -109,7 +109,7 @@ jobs:
 
   prebuilt:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -183,7 +183,7 @@ jobs:
   # skipped on every PR, so a change to it passed CI without being run once.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
