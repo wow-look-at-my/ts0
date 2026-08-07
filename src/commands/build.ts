@@ -20,7 +20,47 @@ export interface BuildOverrides {
 	outdir?: string;
 }
 
+// build compiles this project and then every ts0 project nested inside it,
+// each under its OWN ts0.json. A nested project is not a directory to skip:
+// its settings (JSX, target, loaders) make it unbuildable under the parent's
+// config, so the parent delegates to it instead of ignoring it. Recursion is
+// depth-unlimited -- each nested build recurses in turn -- and a failure
+// anywhere fails the whole build, with every project's errors reported rather
+// than just the first.
 export async function build(options?: {
+	watch?: boolean;
+	overrides?: BuildOverrides;
+	configPath?: string;
+	// Build only this project. `ts0 run` sets it: it builds the one entry it
+	// is about to execute, and running N nested projects is not a thing.
+	selfOnly?: boolean;
+}): Promise<BuildResult> {
+	const startTime = performance.now();
+	const self = await buildSelf(options);
+	if (options?.selfOnly) return self;
+
+	const { rootDir } = loadConfig(options?.configPath);
+	const nested = findNestedProjectDirs(rootDir);
+	if (nested.length === 0) return self;
+
+	const outputFiles = [...self.outputFiles];
+	const errors = [...self.errors];
+	let success = self.success;
+
+	for (const dir of nested) {
+		console.log(`\n${dir}:`);
+		// Overrides are NOT passed down: --entry/--outfile/--outdir name paths
+		// in the project the user invoked, and mean nothing in a nested one.
+		const result = await build({ watch: options?.watch, configPath: join(rootDir, dir, "ts0.json") });
+		outputFiles.push(...result.outputFiles);
+		errors.push(...result.errors.map((e) => `${dir}: ${e}`));
+		if (!result.success) success = false;
+	}
+
+	return { success, outputFiles, errors, duration: performance.now() - startTime };
+}
+
+async function buildSelf(options?: {
 	watch?: boolean;
 	overrides?: BuildOverrides;
 	configPath?: string;
@@ -161,11 +201,13 @@ function applyOverrides(config: Ts0Config, overrides?: BuildOverrides): Ts0Confi
 }
 
 // findNestedProjectDirs returns the rootDir-relative paths of subdirectories
-// that are themselves ts0 projects (they contain their own ts0.json). The
-// self-type-check excludes these so a nested project's settings (e.g. JSX)
-// don't leak into the parent's type-check. node_modules/dist/dotfiles are
-// skipped, and descent stops at a nested project boundary.
-function findNestedProjectDirs(rootDir: string): string[] {
+// that are themselves ts0 projects (they contain their own ts0.json). These
+// are the recursion targets for `ts0 build` and `ts0 test`: the parent's own
+// type-check leaves them out so a nested project's settings (e.g. JSX) don't
+// leak into it, and then builds/tests them under their own config instead.
+// node_modules/dist/dotfiles are not walked, and descent stops at a nested
+// project boundary -- that project's own recursion covers its subtree.
+export function findNestedProjectDirs(rootDir: string): string[] {
 	const found: string[] = [];
 	const walk = (dir: string): void => {
 		for (const name of readdirSync(dir)) {
@@ -334,17 +376,18 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	return { success: true, output };
 }
 
-// typecheckExcludeDirs returns the directories the gate does not check, as
-// paths relative to rootDir. A nested project (its own ts0.json) may use
-// different settings -- e.g. JSX -- that would make the parent's type-check
-// fail on it; it is type-checked on its own when built directly. The output dir
-// is excluded so emitted artifacts aren't re-checked, and config.exclude adds
-// directories that type-check under their own separate tsconfig (a test tree
-// with its own types, an experiment dir, ...).
+// typecheckExcludeDirs returns the directories this project's own gate does
+// not check, as paths relative to rootDir. A nested project (its own ts0.json)
+// may use different settings -- e.g. JSX -- that would make the parent's
+// type-check fail on it, so it is checked under its own config when build/test
+// recurse into it. The output dir is excluded so emitted artifacts aren't
+// re-checked, and config.exclude adds directories that type-check under their
+// own separate tsconfig (a test tree with its own types, an experiment dir).
 //
-// `ts0 test` skips the same directories when discovering test files: running a
-// test the gate never checked would execute an un-type-checked program, which
-// is the one thing the gate exists to prevent. Keep the two using this list.
+// `ts0 test` leaves the same directories out of ITS OWN discovery, for the
+// same reason and with the same follow-through: a nested project's tests run
+// in the recursive pass, under the gate that can actually check them. Nothing
+// here means "never checked" -- only "not checked by this project".
 export function typecheckExcludeDirs(config: Ts0Config, rootDir: string): string[] {
 	return [config.outdir, ...(config.exclude ?? []), ...findNestedProjectDirs(rootDir)].filter(
 		(d): d is string => !!d,

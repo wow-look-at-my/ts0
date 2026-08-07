@@ -1,20 +1,22 @@
-// Regression test for which files `ts0 test` runs.
+// Regression test for which files `ts0 test` and `ts0 build` reach.
 //
-// The gate deliberately does not type-check a nested ts0 project (its own
-// ts0.json, possibly its own JSX/resolution settings). Test discovery used to
-// ignore that and glob the whole tree, so `ts0 test` in the parent SPAWNED a
-// nested project's test files -- executing a program nothing had type-checked,
-// which is the one thing the gate exists to prevent. A nested test file with a
-// blatant type error was reported `ok`.
+// A nested ts0 project (its own ts0.json, possibly its own JSX/resolution
+// settings) cannot be type-checked under the parent's config, so the parent's
+// own gate leaves it out. That must never mean it goes unchecked: ts0 recurses
+// into it and runs it under ITS config. Two ways to get this wrong, and both
+// have been shipped -- globbing the nested tests into the parent's run, which
+// EXECUTES a program nothing type-checked (a nested test with a blatant type
+// error was reported `ok`), and dropping them entirely, which reports green
+// over tests that never ran.
 //
-// These tests drive the real CLI over temp projects: the parent must not run
-// the nested project's tests, and that project must still catch the error when
-// tested directly.
+// These tests drive the real CLI over temp projects and pin the recursion: a
+// broken nested project must fail the parent's `test` AND its `build`, and the
+// error must come from the nested project's own gate.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,9 +43,9 @@ function runCli(cwd: string, args: string[]): Promise<{ code: number; output: st
 	});
 }
 
-// A parent project whose nested/ subdirectory is its own ts0 project, carrying
-// a test file that only a type-check can reject.
-function nestedProject(): string {
+// A parent project whose nested/ subdirectory is its own ts0 project. The
+// nested test file is the payload: only a type-check rejects it.
+function nestedProject(nestedTest: string): string {
 	const root = mkdtempSync(join(tmpdir(), "ts0-discovery-"));
 	const cfg = '{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }\n';
 	writeFileSync(join(root, "package.json"), '{ "type": "module" }\n');
@@ -56,28 +58,70 @@ function nestedProject(): string {
 	mkdirSync(join(nested, "src"), { recursive: true });
 	writeFileSync(join(nested, "ts0.json"), cfg);
 	writeFileSync(join(nested, "src", "main.ts"), "export const ok: number = 1;\n");
-	writeFileSync(join(nested, "src", "main.test.ts"), TYPE_ERROR_TEST);
+	writeFileSync(join(nested, "src", "main.test.ts"), nestedTest);
 	return root;
 }
 
-test("ts0 test does not run tests inside a nested ts0 project", async () => {
-	const root = nestedProject();
+test("ts0 test recurses into a nested ts0 project", async () => {
+	const root = nestedProject(CLEAN_TEST);
 	try {
 		const { code, output } = await runCli(root, ["test"]);
-		assert.match(output, /Found 1 test file/, `parent discovered the nested project's tests:\n${output}`);
-		assert.doesNotMatch(output, /nested/, `parent ran a test the gate never checked:\n${output}`);
 		assert.equal(code, 0, output);
+		// Both projects ran, each finding the one test file it owns.
+		assert.match(output, /\nnested:/, `nested project was never entered:\n${output}`);
+		assert.equal(
+			output.match(/Found 1 test file/g)?.length,
+			2,
+			`expected one test run per project:\n${output}`,
+		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("a nested ts0 project still type-checks its own tests", async () => {
-	const root = nestedProject();
+test("a type error in a nested project's test fails the parent's ts0 test", async () => {
+	const root = nestedProject(TYPE_ERROR_TEST);
 	try {
-		const { code, output } = await runCli(join(root, "nested"), ["test"]);
-		assert.equal(code, 1, `nested project ran an un-type-checked test:\n${output}`);
+		const { code, output } = await runCli(root, ["test"]);
+		assert.equal(code, 1, `parent reported success over a broken nested project:\n${output}`);
+		assert.match(output, /TS2322/, `nested project's gate never ran:\n${output}`);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a type error in a nested project fails the parent's ts0 build", async () => {
+	const root = nestedProject(TYPE_ERROR_TEST);
+	try {
+		const { code, output } = await runCli(root, ["build"]);
+		assert.equal(code, 1, `parent build reported success over a broken nested project:\n${output}`);
 		assert.match(output, /TS2322/);
+		// The parent's own output still landed; only the nested build failed.
+		assert.ok(existsSync(join(root, "dist", "main.js")), "parent's own build did not run");
+		assert.ok(!existsSync(join(root, "nested", "dist")), "nested project emitted despite a type error");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ts0 build recurses into a nested ts0 project", async () => {
+	const root = nestedProject(CLEAN_TEST);
+	try {
+		const { code, output } = await runCli(root, ["build"]);
+		assert.equal(code, 0, output);
+		assert.ok(existsSync(join(root, "dist", "main.js")), "parent's own build did not run");
+		assert.ok(existsSync(join(root, "nested", "dist", "main.js")), `nested project was not built:\n${output}`);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ts0 run builds only its own project, not nested ones", async () => {
+	const root = nestedProject(CLEAN_TEST);
+	try {
+		const { code } = await runCli(root, ["run"]);
+		assert.equal(code, 0);
+		assert.ok(!existsSync(join(root, "nested", "dist")), "run built a nested project it will not execute");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

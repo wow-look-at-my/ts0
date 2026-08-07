@@ -84,9 +84,9 @@ ts0 build     # produce a bundled output
 | Command          | What it does                                           |
 | ---------------- | ------------------------------------------------------ |
 | `ts0 init`       | Create `ts0.json` and starter files in the cwd         |
-| `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild|
+| `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild. Recurses into nested ts0 projects |
 | `ts0 run [file]` | Type-check, build, then run the entry point (or a specific file) |
-| `ts0 test [pat]` | Run tests via Node's built-in test runner              |
+| `ts0 test [pat]` | Run tests via Node's built-in test runner. Recurses into nested ts0 projects |
 
 ### Flags
 
@@ -428,12 +428,14 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     loop, minus the artifact, but never minus the type-check.
 - **Test:** `ts0 test` type-checks the whole project, then (only if it passes)
     runs the discovered test files via `node --test --experimental-strip-types`. A
-    type error anywhere fails the command and no tests run. Discovery skips what
-    the type-check skips &mdash; the output dir, `exclude`d trees, and nested ts0
-    projects (those are tested by running `ts0 test` in them) &mdash; so a test is
-    never run un-checked. `ts0 test --watch`
+    type error anywhere fails the command and no tests run. `ts0 test --watch`
     re-type-checks and re-runs on every change (ts0 drives the watch loop itself
     rather than `node --test --watch`, so the check is never skipped).
+- **Nested projects:** a subdirectory with its own `ts0.json` is its own
+    project, and `ts0 build` / `ts0 test` recurse into every one of them, each
+    under its own config &mdash; to any depth. Nothing is skipped: a broken
+    nested project fails the parent. (`ts0 run` executes one entry, so it builds
+    only its own project.)
 
 ## License
 

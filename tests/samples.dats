@@ -116,10 +116,10 @@ tests:
 				set -euo pipefail
 				. {shared.stage.sh}
 				stage "$1" samples/js
-				# Running the sample's tests is the only thing that EXECUTES
-				# vec.test.ts -- the parent repo's `ts0 test` skips a nested
-				# project's tests. It is what catches an import that bundles
+				# Executes vec.test.ts, which catches an import that bundles
 				# but that Node's ESM resolver cannot resolve at run time.
+				# (The repo's own `ts0 test` reaches it too, by recursing into
+				# this project; here it is covered in isolation.)
 				ts0 test 2>&1 | tee "$1"
 				ts0 build 2>&1 | tee -a "$1"
 				# Cross-file properties, which no single-file check can state.
