@@ -289,6 +289,9 @@ fetch type declarations from the same URLs as the code.
     forcing `.ts` extensions on library source. Add an ambient declaration
     (e.g. `declare module "*.wgsl" { const s: string; export default s; }`) so
     loader imports type-check.
+- Test files are the exception: `ts0 test` hands them to Node, whose resolver
+    takes the specifier literally, so give their imports a real `.ts`/`.tsx`
+    extension even though the sources beside them need not.
 - `ts0 run` does not apply to this target (there is no single entry to run);
     use `ts0 build`. The single-file `outfile` option is likewise ignored —
     output always goes to `outdir`.
@@ -384,7 +387,10 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     loop, minus the artifact, but never minus the type-check.
 - **Test:** `ts0 test` type-checks the whole project, then (only if it passes)
     runs the discovered test files via `node --test --experimental-strip-types`. A
-    type error anywhere fails the command and no tests run. `ts0 test --watch`
+    type error anywhere fails the command and no tests run. Discovery skips what
+    the type-check skips &mdash; the output dir, `exclude`d trees, and nested ts0
+    projects (those are tested by running `ts0 test` in them) &mdash; so a test is
+    never run un-checked. `ts0 test --watch`
     re-type-checks and re-runs on every change (ts0 drives the watch loop itself
     rather than `node --test --watch`, so the check is never skipped).
 

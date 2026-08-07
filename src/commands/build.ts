@@ -294,16 +294,7 @@ async function runTsc(
 // the --no-build path) call it before emitting OR executing anything, so it is
 // the chokepoint that makes type-checking unskippable.
 export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<{ success: boolean; output: string }> {
-	const nestedProjects = findNestedProjectDirs(rootDir);
-	// A nested project (its own ts0.json) may use different settings -- e.g.
-	// JSX -- that would make the parent's type-check fail on it; it is
-	// type-checked on its own when built directly. The output dir is excluded
-	// so emitted artifacts aren't re-checked, and config.exclude adds
-	// directories that type-check under their own separate tsconfig (a test
-	// tree with its own types, an experiment dir, ...).
-	const excludeDirs = [config.outdir, ...(config.exclude ?? []), ...nestedProjects].filter(
-		(d): d is string => !!d,
-	);
+	const excludeDirs = typecheckExcludeDirs(config, rootDir);
 
 	// The entry, named explicitly. tsc's `**/*` never descends into a
 	// dot-directory, so an entry under one -- a build script in `.github/`,
@@ -341,6 +332,23 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	if (!explicitAny.success) return explicitAny;
 
 	return { success: true, output };
+}
+
+// typecheckExcludeDirs returns the directories the gate does not check, as
+// paths relative to rootDir. A nested project (its own ts0.json) may use
+// different settings -- e.g. JSX -- that would make the parent's type-check
+// fail on it; it is type-checked on its own when built directly. The output dir
+// is excluded so emitted artifacts aren't re-checked, and config.exclude adds
+// directories that type-check under their own separate tsconfig (a test tree
+// with its own types, an experiment dir, ...).
+//
+// `ts0 test` skips the same directories when discovering test files: running a
+// test the gate never checked would execute an un-type-checked program, which
+// is the one thing the gate exists to prevent. Keep the two using this list.
+export function typecheckExcludeDirs(config: Ts0Config, rootDir: string): string[] {
+	return [config.outdir, ...(config.exclude ?? []), ...findNestedProjectDirs(rootDir)].filter(
+		(d): d is string => !!d,
+	);
 }
 
 // entryTypeCheckPaths returns tsconfig `include` entries naming the configured

@@ -215,6 +215,12 @@ jobs:
       - name: Test js sample
         working-directory: samples/js
         run: |
+          # A nested project's tests only ever run when it is tested directly
+          # (the parent skips them -- it never type-checks them either), so
+          # this is the one thing that executes vec.test.ts. Without it a test
+          # file that bundles fine but cannot be RESOLVED at runtime -- an
+          # extensionless import Node's ESM loader rejects -- ships unnoticed.
+          ts0 test
           ts0 build
           # Directory entry -> "js" library target: every src/**/*.ts is
           # compiled to a parallel dist/**/*.js, structure preserved.

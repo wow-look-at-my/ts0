@@ -3,7 +3,7 @@ import { glob } from "node:fs/promises";
 import { watch as fsWatch } from "node:fs";
 import { join, extname } from "node:path";
 import { loadConfig } from "../config.ts";
-import { runTypecheck } from "./build.ts";
+import { runTypecheck, typecheckExcludeDirs } from "./build.ts";
 
 export interface TestOptions {
 	pattern?: string;
@@ -17,10 +17,23 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	const { config, rootDir } = loadConfig(options.configPath);
 	const pattern = options.pattern || config.test.pattern;
 
+	// Discovery skips exactly what the gate skips (nested ts0 projects, the
+	// output dir, config.exclude). Those files are never type-checked here, so
+	// running them would execute an un-type-checked program -- and a nested
+	// project's tests are written for ITS config, not this one. They run when
+	// that project is tested directly. Filtering the results rather than the
+	// glob's `exclude` hook is deliberate: the hook is handed a mix of bare
+	// names and relative paths, while a result is always a path from rootDir.
+	const skipDirs = typecheckExcludeDirs(config, rootDir).map((d) => d.split(/[\\/]/).join("/"));
+	const isSkipped = (file: string): boolean => {
+		const rel = file.split(/[\\/]/).join("/");
+		return skipDirs.some((d) => rel === d || rel.startsWith(`${d}/`));
+	};
+
 	const findTestFiles = async (): Promise<string[]> => {
 		const files: string[] = [];
 		for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
-			files.push(file);
+			if (!isSkipped(file)) files.push(file);
 		}
 		return files;
 	};

@@ -74,6 +74,10 @@ file is picked up without touching the workflow:
 - `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
     temp projects and pins the gate's file set: a type error in the configured
     entry fails the gate whether or not the entry sits in a dot-directory.
+- `src/commands/test-discovery.test.ts` drives the real CLI over a temp project
+    with a nested ts0 project and pins which files `ts0 test` runs: never the
+    nested project's (the parent never type-checks them), which that project
+    still rejects when tested directly.
 
 Otherwise CI exercises the CLI end-to-end by:
 
@@ -92,7 +96,10 @@ Otherwise CI exercises the CLI end-to-end by:
     component's tagline contains the word "any" as JSX text, and CI asserts it
     reaches the output &mdash; the guard that the explicit-`any` ban stays a
     parse and never becomes a text search.
-7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+7. Running `ts0 test` and `ts0 build` against `samples/js` (a **directory**
+    entry). The test run is the only thing that executes `vec.test.ts` (the
+    parent skips a nested project's tests), so it is what catches an import
+    that bundles but cannot be resolved by Node at runtime. The build asserts
     the js library target compiled every `src/**/*.ts` to a parallel
     `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
     chunk (the shared body appears in exactly one output file, not copied into
@@ -278,6 +285,12 @@ directories listed in the config's `exclude` field (for trees that type-check
 under their own separate tsconfig &mdash; a test harness with different types,
 an experiment dir). `exclude` never changes what gets built, only what the
 gate checks.
+
+`typecheckExcludeDirs(config, rootDir)` owns that list, and **`ts0 test` skips
+the same directories when discovering test files**. Running a test the gate
+never checked would execute an un-type-checked program &mdash; exactly what the
+gate exists to prevent &mdash; so the two must not drift. A nested project's
+tests run when that project is tested directly.
 
 ### Explicit `any` is banned (unconditionally)
 
