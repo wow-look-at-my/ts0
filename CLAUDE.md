@@ -78,6 +78,18 @@ The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
 `node --experimental-strip-types --test`), which evaluates the single-file fetch
 interceptor against a window/document shim and asserts it serves embedded assets
 for string, `URL`-object, and `Request` fetch inputs.
+Unit tests are every `src/**/*.test.ts`, run in CI by one globbed
+`node --experimental-strip-types --test "src/**/*.test.ts"` step, so a new test
+file is picked up without touching the workflow:
+
+- `src/runtime/fetch-interceptor.test.ts` evaluates the single-file fetch
+    interceptor against a window/document shim and asserts it serves embedded
+    assets for string, `URL`-object, and `Request` fetch inputs.
+- `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
+    temp projects and pins the gate's file set: a type error in the configured
+    entry fails the gate whether or not the entry sits in a dot-directory.
+
+Otherwise CI exercises the CLI end-to-end by:
 
 Everything else is a **behavioural suite** in `tests/*.dats`, run by
 [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
@@ -88,6 +100,65 @@ WROTE -- declarative `outputs.files` match/notMatch checks, with shell only for
 properties that span files. A staged project gets the repo's `node_modules`
 symlinked in, the position it resolves `@types/node`/`preact` from when built
 in place.
+1. Building `dist/ts0` from source.
+2. `npm link`ing it.
+3. Running `ts0 init`, `build`, `run`, `test` against a fresh tmp project.
+4. Running `ts0 build` and `ts0 test` against `samples/basic`.
+5. Running `ts0 build` against `samples/html` and asserting the bundled JS/CSS
+    are inlined into a single `dist/index.html`.
+6. Running `ts0 build` against `samples/html-jsx` and asserting the JSX compiled
+    to the automatic Preact runtime (`preact/jsx-runtime`) with no
+    `React.createElement`/`React.Fragment` &mdash; the regression guard for the
+    "React is not defined" bug where JSX config wasn't threaded into the HTML
+    build path. (Both HTML samples also now exercise the type-check on the HTML
+    path, since HTML entries are type-checked rather than skipped.) The
+    component's tagline contains the word "any" as JSX text, and CI asserts it
+    reaches the output &mdash; the guard that the explicit-`any` ban stays a
+    parse and never becomes a text search.
+7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+    the js library target compiled every `src/**/*.ts` to a parallel
+    `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
+    chunk (the shared body appears in exactly one output file, not copied into
+    each importer), inlined a non-shared `.frag` text-loader import, and emitted
+    no sourcemaps. The same step asserts the **declaration emit**: a parallel
+    `dist/**/*.d.ts` tree mirroring the sources (including a `.tsx` component),
+    `.ts`/`.tsx` extension specifiers preserved in declaration output,
+    no `.d.ts` for test files or esbuild chunks, the ambient `*.d.ts` source
+    not copied, no `.d.ts.map`, and byte-identical `.d.ts` across a rebuild
+    (determinism). A follow-up step proves `"declarations": false` opts out
+    (`.js` emitted, zero `.d.ts`).
+8. Running `ts0 build` against `samples/userscript` and asserting the
+    userscript-bundling features: the `==UserScript==` header re-prepended
+    byte-exactly at the top (exactly once, stable across a rebuild &mdash;
+    `preserveHeader`), the IIFE assigned to the configured `globalName`, no
+    module statements and no shebang in the browser output, and the
+    extensionless `./lib/greet` import both type-checked (browser targets
+    gate-check with bundler resolution) and inlined. Follow-up steps prove
+    `--config <path>` builds the sample from the repo root and that the
+    `exclude` config skips a broken directory the gate would otherwise fail on.
+9. Running `ts0 build` against `samples/bookmarklet` and asserting the
+    `javascript:<file>` href was replaced by a percent-encoded minified
+    bundle that decodes back to the program (lib import inlined), while a
+    real `javascript:void(0)` href and the rest of the page stay untouched
+    and no fetch interceptor is injected.
+10. The "Type-check gate blocks broken output" step: a project with a deliberate
+    type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
+    `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
+    nothing (no `dist/`, no test run). The error strips to valid JS and the test
+    file registers no tests, so a `--no-build` or `test` run would exit 0 if the
+    check were ever skipped &mdash; this step catches exactly that regression.
+    It also repeats the check for a **js (directory) target**, proving a type
+    error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
+    tree, and for an entry under a **dot-directory** (`.github/scripts/step.ts`),
+    which `**/*` alone never reaches.
+11. The "Explicit any is a build error" step: a program that is *valid*
+    TypeScript except for an explicit `any` must fail `build`, `run`,
+    `run --no-build`, and `test`, and emit nothing &mdash; tsc has no flag for
+    this, so a skipped ban would build cleanly and only this step catches it.
+    It walks every spelling (`x: any`, `as any`, `<any>`, `any[]`,
+    `Promise<any>`, `type A = any`, and an `any` inside a `.d.ts`), then
+    proves the look-alikes still build: identifiers, object keys, strings,
+    comments and regexes containing the word `any`.
 
 - `tests/cli.dats` -- `ts0 init` scaffolds a project that `build`, `run` and
     `test` then handle end to end; `--config <path>` builds a named config from
@@ -223,6 +294,14 @@ Key details of the generated tsconfig:
     scripts fails the build like any other project. Do not reintroduce an
     entry-shaped skip; `samples/html-jsx-typeerror` and the CI step over it exist
     to keep this honest.
+- **The configured entry is named in `include`, not just globbed**
+    (`entryTypeCheckPaths`). tsc skips dot-directories while expanding a leading
+    wildcard but never a path segment it was handed, so without this an entry
+    under `.github/`, `.config/`, … is bundled against an EMPTY program and the
+    build reports success. A directory entry yields one glob per TS extension,
+    but only when it actually holds TypeScript &mdash; globs matching nothing
+    would abort with TS18003 instead of letting build-js report "No TypeScript
+    modules found". An HTML entry yields none (its scripts come from the markup).
 - **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
     the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
     entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`
