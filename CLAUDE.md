@@ -64,11 +64,18 @@ npm run build                                       # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
 ```
 
-The only unit test is `src/runtime/fetch-interceptor.test.ts` (run in CI via
-`node --experimental-strip-types --test`), which evaluates the single-file fetch
-interceptor against a window/document shim and asserts it serves embedded assets
-for string, `URL`-object, and `Request` fetch inputs. Otherwise CI exercises the
-CLI end-to-end by:
+Unit tests are every `src/**/*.test.ts`, run in CI by one globbed
+`node --experimental-strip-types --test "src/**/*.test.ts"` step, so a new test
+file is picked up without touching the workflow:
+
+- `src/runtime/fetch-interceptor.test.ts` evaluates the single-file fetch
+    interceptor against a window/document shim and asserts it serves embedded
+    assets for string, `URL`-object, and `Request` fetch inputs.
+- `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
+    temp projects and pins the gate's file set: a type error in the configured
+    entry fails the gate whether or not the entry sits in a dot-directory.
+
+Otherwise CI exercises the CLI end-to-end by:
 
 1. Building `dist/ts0` from source.
 2. `npm link`ing it.
@@ -119,7 +126,8 @@ CLI end-to-end by:
     check were ever skipped &mdash; this step catches exactly that regression.
     It also repeats the check for a **js (directory) target**, proving a type
     error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
-    tree.
+    tree, and for an entry under a **dot-directory** (`.github/scripts/step.ts`),
+    which `**/*` alone never reaches.
 11. The "Explicit any is a build error" step: a program that is *valid*
     TypeScript except for an explicit `any` must fail `build`, `run`,
     `run --no-build`, and `test`, and emit nothing &mdash; tsc has no flag for
@@ -224,6 +232,14 @@ Key details of the generated tsconfig:
     scripts fails the build like any other project. Do not reintroduce an
     entry-shaped skip; `samples/html-jsx-typeerror` and the CI step over it exist
     to keep this honest.
+- **The configured entry is named in `include`, not just globbed**
+    (`entryTypeCheckPaths`). tsc skips dot-directories while expanding a leading
+    wildcard but never a path segment it was handed, so without this an entry
+    under `.github/`, `.config/`, … is bundled against an EMPTY program and the
+    build reports success. A directory entry yields one glob per TS extension,
+    but only when it actually holds TypeScript &mdash; globs matching nothing
+    would abort with TS18003 instead of letting build-js report "No TypeScript
+    modules found". An HTML entry yields none (its scripts come from the markup).
 - **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
     the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
     entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`
