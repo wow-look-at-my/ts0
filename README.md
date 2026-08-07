@@ -147,6 +147,8 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `test.pattern` | `string`           | `"**/*.test.ts"`   | Glob for test files                                           |
 | `embedAssets` | `boolean`           | `true`             | HTML entries: embed runtime-fetched assets (see below). Set `false` to skip. |
 | `assetDirs` | `string[]`            | &mdash;            | HTML entries: directories to scan for embeddable assets (relative to config file). When set, only these dirs are scanned instead of the entry's directory. |
+| `inlineAssets` | `boolean`          | `true`             | HTML entries: inline every referenced script/stylesheet into the HTML. Set `false` to emit a multi-file static site instead (see [Referenced assets](#referenced-assets-multi-file-sites)). |
+| `assetPath` | `string`              | `"assets"`         | HTML entries with `inlineAssets: false`: the URL prefix written into the HTML, and &mdash; minus a leading `/` or `./` &mdash; the subdirectory under the output dir. May not contain `..`. |
 | `jsx`       | `"automatic" \| "transform" \| "preserve"` | &mdash; | Enable JSX/TSX. `"automatic"` uses the modern runtime (no factory import; pair with `jsxImportSource`); `"transform"` is the classic `React.createElement`; `"preserve"` leaves JSX as-is. |
 | `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
 | `loaders`   | `object`              | &mdash;            | Map file extensions to loader names (`text`, `dataurl`, `base64`, `binary`, `file`, `json`, …), e.g. `{ ".wgsl": "text" }`. The friendly way to import non-JS/TS files; applies to the default and js targets. |
@@ -192,7 +194,9 @@ break the directive prologue. See `samples/userscript`.
 ### HTML entries
 
 If `entry` ends with `.html`, `ts0 build` produces a single self-contained HTML file
-that runs from disk (`file://`) with no asset tree alongside it. Specifically:
+that runs from disk (`file://`) with no asset tree alongside it &mdash; the default;
+`"inlineAssets": false` emits a [multi-file site](#referenced-assets-multi-file-sites)
+instead. Specifically:
 
 - Every `<script src="local">` is bundled with esbuild and inlined as `<script>…</script>`.
 - Every `<script type="module">…inline code…</script>` block is bundled with esbuild
@@ -209,6 +213,43 @@ that runs from disk (`file://`) with no asset tree alongside it. Specifically:
 The project's `.ts`/`.tsx` files are type-checked (with the DOM lib) before any
 HTML is written, so a type error in an HTML project's scripts fails the build just
 like it would for a Node entry.
+
+#### Referenced assets (multi-file sites)
+
+A single self-contained file is the wrong shape for an app served over HTTP: nothing
+is independently cacheable, and a one-line HTML edit busts the whole JS bundle.
+`"inlineAssets": false` emits a normal static site instead &mdash; each referenced
+local script and stylesheet is bundled to its own file under `assetPath`, and the tag
+keeps referencing it via `src=`/`href=`. Output names are the source's basename with
+the bundled extension (`src/main.ts` &rarr; `main.js`), with no content hash: the
+serving side owns cache headers and ETags.
+
+```json
+{
+    "entry": "index.html",
+    "outdir": "dist",
+    "target": "browser",
+    "inlineAssets": false,
+    "assetPath": "/assets"
+}
+```
+
+```
+dist/
+    index.html          <link href="/assets/app.css">, <script src="/assets/main.js">
+    assets/
+        main.js
+        app.css
+```
+
+`assetPath` is used verbatim as the URL prefix, so `"/assets"` (absolute) is what a
+single-page app wants &mdash; the same shell is served on deep links like `/c/abc123`,
+where a relative URL would resolve against the wrong directory. `"assets"` and
+`"./assets"` write the same files and emit relative URLs. Two sources with the same
+basename (`a/main.ts` and `b/main.ts`) fail the build rather than overwriting each
+other; if any reference fails, nothing is written at all. External URLs, inline
+`<script>` bodies, bookmarklet hrefs and the fetch interceptor behave exactly as
+they do in inline mode. See `samples/html-referenced`.
 
 #### Bookmarklet links
 

@@ -1,0 +1,10 @@
+{
+	"entry": "index.html",
+	"outdir": "dist",
+	"target": "browser",
+	"format": "esm",
+	"strict": true,
+	"inlineAssets": false,
+	"assetPath": "/assets",
+	"embedAssets": false
+}
