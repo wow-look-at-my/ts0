@@ -305,6 +305,13 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 		(d): d is string => !!d,
 	);
 
+	// The entry, named explicitly. tsc's `**/*` never descends into a
+	// dot-directory, so an entry under one -- a build script in `.github/`,
+	// `.config/` -- is bundled against an EMPTY type-check program while the
+	// build still reports success. Naming it puts it (and everything it
+	// imports) in the program wherever it lives.
+	const entryPaths = entryTypeCheckPaths(config, rootDir, excludeDirs);
+
 	// Nothing to check: a project with no TypeScript sources at all (e.g. a
 	// plain-JS HTML entry). tsc would abort with TS18003 "No inputs were
 	// found", so treat an empty source set as a vacuous pass -- there are no
@@ -312,12 +319,12 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	// a project can consist of declaration files only, which don't count as
 	// sources here but can still write `any`.)
 	let output = "No TypeScript sources to check.";
-	if (hasTypeScriptSources(rootDir, excludeDirs)) {
+	if (entryPaths.length > 0 || hasTypeScriptSources(rootDir, excludeDirs)) {
 		const tsconfigContent = {
 			compilerOptions: { ...generatedCompilerOptions(config, rootDir), noEmit: true },
 			// Include .tsx/.mts/.cts alongside .ts so JSX components and ESM/CJS
 			// TypeScript variants are type-checked too.
-			include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"],
+			include: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts", ...entryPaths],
 			exclude: ["node_modules", ...excludeDirs],
 		};
 
@@ -334,6 +341,28 @@ export async function runTypecheck(config: Ts0Config, rootDir: string): Promise<
 	if (!explicitAny.success) return explicitAny;
 
 	return { success: true, output };
+}
+
+// entryTypeCheckPaths returns tsconfig `include` entries naming the configured
+// entry: the file itself, or one glob per TypeScript extension for a directory
+// entry. Both forms name the entry's path explicitly, which is what makes them
+// reach inside a dot-directory -- tsc skips those only while expanding a
+// leading wildcard, never a path segment it was given. An HTML entry yields
+// nothing: its scripts are discovered from the markup, not from the config.
+function entryTypeCheckPaths(config: Ts0Config, rootDir: string, excludeDirs: string[]): string[] {
+	const entry = config.entry;
+	if (!entry) return [];
+	const rel = entry.split(/[\\/]/).join("/");
+	const abs = resolve(rootDir, entry);
+	if (!existsSync(abs)) return [];
+	if (statSync(abs).isDirectory()) {
+		// Globs that match nothing would make tsc abort with TS18003, so a
+		// JS-only directory entry must yield none: it has to reach build-js
+		// and get that target's own "No TypeScript modules found" error.
+		if (!hasTypeScriptSources(rootDir, excludeDirs, abs)) return [];
+		return ["ts", "tsx", "mts", "cts"].map((ext) => `${rel}/**/*.${ext}`);
+	}
+	return /\.(ts|tsx|mts|cts)$/i.test(rel) ? [rel] : [];
 }
 
 // collectAmbientDeclarations returns the project's *.d.ts files (ambient
@@ -492,12 +521,13 @@ export function typecheckPlugin(config: Ts0Config, rootDir: string): esbuild.Plu
 	};
 }
 
-// hasTypeScriptSources reports whether the project contains any TypeScript
-// source file (.ts/.tsx/.mts/.cts, excluding .d.ts declarations) outside
-// node_modules, the output dir, and nested ts0 projects. Used to skip the
-// type-check for a project with no TS to check (e.g. a plain-JS HTML entry),
-// which would otherwise make tsc abort with TS18003.
-function hasTypeScriptSources(rootDir: string, excludeDirs: string[]): boolean {
+// hasTypeScriptSources reports whether the tree under startDir (the project
+// root by default) contains any TypeScript source file (.ts/.tsx/.mts/.cts,
+// excluding .d.ts declarations) outside node_modules, the output dir, and
+// nested ts0 projects. Used to skip the type-check for a project with no TS to
+// check (e.g. a plain-JS HTML entry), which would otherwise make tsc abort with
+// TS18003. excludeDirs stay relative to rootDir whatever startDir is.
+function hasTypeScriptSources(rootDir: string, excludeDirs: string[], startDir: string = rootDir): boolean {
 	const excluded = new Set(excludeDirs.map((d) => d.split(/[\\/]/).join("/")));
 	let found = false;
 	const walk = (dir: string): void => {
@@ -518,6 +548,6 @@ function hasTypeScriptSources(rootDir: string, excludeDirs: string[]): boolean {
 			}
 		}
 	};
-	walk(rootDir);
+	walk(startDir);
 	return found;
 }
