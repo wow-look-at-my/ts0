@@ -116,7 +116,12 @@ tests:
 				set -euo pipefail
 				. {shared.stage.sh}
 				stage "$1" samples/js
-				ts0 build 2>&1 | tee "$1"
+				# Executes vec.test.ts, which catches an import that bundles
+				# but that Node's ESM resolver cannot resolve at run time.
+				# (The repo's own `ts0 test` reaches it too, by recursing into
+				# this project; here it is covered in isolation.)
+				ts0 test 2>&1 | tee "$1"
+				ts0 build 2>&1 | tee -a "$1"
 				# Cross-file properties, which no single-file check can state.
 				# No duplication: add() is shared (vec.ts is an entry AND
 				# shape.ts imports it), so its body must live in exactly one

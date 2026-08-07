@@ -52,7 +52,9 @@ ts0.json                # ts0 builds itself with these settings
 
 `ts0` is self-hosting: `package.json`'s `build` script invokes the CLI from
 source via `node --experimental-strip-types src/cli.ts build`, which reads the
-repo's own `ts0.json` and produces `dist/ts0`.
+repo's own `ts0.json` and produces `dist/ts0`. Every `samples/*` directory is a
+nested ts0 project, so that one command builds them too &mdash; see "Nested
+projects" under Type-checking.
 
 ## Runtime requirements
 
@@ -88,8 +90,19 @@ file is picked up without touching the workflow:
 - `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
     temp projects and pins the gate's file set: a type error in the configured
     entry fails the gate whether or not the entry sits in a dot-directory.
+- `src/commands/test-discovery.test.ts` drives the real CLI over a temp project
+    with a nested ts0 project and pins the recursion: a broken nested project
+    fails the parent's `build` AND `test`, a clean one is built and tested by
+    it, and `ts0 run` builds only its own project.
 
-Otherwise CI exercises the CLI end-to-end by:
+Everything else is a **behavioural suite** in `tests/*.dats`, run by
+[dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
+`npm link`s it, fetches the dats binary and runs the suites. Every test stages
+its project into its own directory and asserts what the build WROTE --
+declarative `outputs.files` match/notMatch checks, with shell only for
+properties that span files. A staged project gets the repo's `node_modules`
+symlinked in, the position it resolves `@types/node`/`preact` from when built
+in place.
 
 Everything else is a **behavioural suite** in `tests/*.dats`, run by
 [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
@@ -159,6 +172,11 @@ in place.
     `Promise<any>`, `type A = any`, and an `any` inside a `.d.ts`), then
     proves the look-alikes still build: identifiers, object keys, strings,
     comments and regexes containing the word `any`.
+The files declare `network: false`, so a local run proves a build never needs
+one. **CI runs `--no-sandbox` and therefore does not**: the org's self-hosted
+runner denies unprivileged user namespaces, so bwrap cannot start and there is
+no docker fallback. Run the suites locally (with bwrap installed) to exercise
+the sandboxed contract.
 
 - `tests/cli.dats` -- `ts0 init` scaffolds a project that `build`, `run` and
     `test` then handle end to end; `--config <path>` builds a named config from
@@ -182,6 +200,26 @@ in place.
     `__ASSETS_JSON__`) and the CLI `--entry`/`--outfile` overrides; `html-jsx`
     (automatic Preact runtime, no `React.createElement`, and a JSX tagline
     reading "any questions" that must survive); `js` (tree mirrored, shared code
+    execute nothing, for the node target, the js (directory) target (no `.js`
+    tree, no partial `.d.ts`) and an entry under a **dot-directory** alike --
+    the last one is the case tsc's `**/*` never reaches on its own. The fixtures are shaped so a skipped
+    check would look fine: the error strips to valid JS and the test file
+    registers no tests, so `--no-build` and `test` would exit 0 if the gate were
+    bypassed. Then the explicit-`any` ban across every spelling (`x: any`,
+    `as any`, `<any>`, `any[]`, `Promise<any>`, `type A = any`, and an `any`
+    inside a `.d.ts`), the look-alikes that must still build (identifiers,
+    object keys, strings, comments, regexes reading "any" -- the guard that the
+    ban stays a parse), `exclude` limiting the gate without changing the build,
+    and a type error in an **HTML** entry failing the build (they were once
+    exempt and reported success regardless).
+- `tests/samples.dats` -- one test per sample: `basic` (build + `ts0 test`);
+    `html` (JS/CSS inlined into one document, `url()` rewritten to `data:`,
+    inline-module bundling, the fetch interceptor with no leftover
+    `__ASSETS_JSON__`) and the CLI `--entry`/`--outfile` overrides; `html-jsx`
+    (automatic Preact runtime, no `React.createElement`, and a JSX tagline
+    reading "any questions" that must survive); `js` (`ts0 test` first &mdash;
+    which EXECUTES `vec.test.ts` and so catches an import that bundles but that
+    Node cannot resolve at run time &mdash; then tree mirrored, shared code
     deduped into a chunk rather than copied, `.frag` text loader, the parallel
     `.d.ts` tree with `.ts`/`.tsx` specifiers preserved, no `.d.ts` for tests or
     chunks, no `.d.ts.map`, and byte-identical declarations across a rebuild)
@@ -292,8 +330,11 @@ Key details of the generated tsconfig:
 - **HTML entries ARE type-checked.** (They used to be skipped.) An HTML project's
     `.ts`/`.tsx` files are checked before bundling, so a type error in HTML
     scripts fails the build like any other project. Do not reintroduce an
-    entry-shaped skip; `samples/html-jsx-typeerror` and the CI step over it exist
-    to keep this honest.
+    entry-shaped skip; the `tests/gate.dats` case "a type error in an HTML
+    entry fails the build" exists to keep this honest. Its project is staged
+    inline, not kept under `samples/`: build and test recurse into every
+    nested ts0 project, so a permanently-broken one in the tree would fail the
+    repo's own build forever.
 - **The configured entry is named in `include`, not just globbed**
     (`entryTypeCheckPaths`). tsc skips dot-directories while expanding a leading
     wildcard but never a path segment it was handed, so without this an entry
@@ -340,6 +381,35 @@ directories listed in the config's `exclude` field (for trees that type-check
 under their own separate tsconfig &mdash; a test harness with different types,
 an experiment dir). `exclude` never changes what gets built, only what the
 gate checks.
+
+`typecheckExcludeDirs(config, rootDir)` owns that list, and `ts0 test` leaves
+the same directories out of its own discovery, so it never spawns a test this
+gate did not check. Nothing on that list goes unchecked, though &mdash; see
+"Nested projects" below for the recursion that covers them.
+
+### Nested projects: recurse, never skip
+
+A subdirectory with its own `ts0.json` is a separate project, and **`ts0 build`
+and `ts0 test` recurse into every one of them** (`findNestedProjectDirs`, then
+`build`/`testTree` re-entering with that project's config). Depth is unlimited
+&mdash; each nested run recurses in turn &mdash; every project runs even after
+one fails, and any failure fails the parent.
+
+This is the whole reason the parent's gate may leave those directories out: a
+nested project's settings (JSX, target, loaders) make it uncheckable under the
+parent's tsconfig, so the parent **delegates** rather than ignores. Never
+convert that delegation back into a skip &mdash; a nested project dropped from
+both the gate and the recursion is code nothing checks, reported green. Equally,
+never fold nested files into the parent's own run: they would execute under a
+config they were not written for, un-type-checked.
+
+`ts0 run` is the one exception, and only because it executes a single entry:
+it builds its own project (`selfOnly`) and nothing else.
+
+Consequence for this repo: `ts0 build` at the root builds every `samples/*`
+project, and `ts0 test` runs their tests. A deliberately-broken fixture
+therefore cannot live in the tree &mdash; stage it inline from a `.dats` test
+instead.
 
 ### Explicit `any` is banned (unconditionally)
 

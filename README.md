@@ -84,9 +84,9 @@ ts0 build     # produce a bundled output
 | Command          | What it does                                           |
 | ---------------- | ------------------------------------------------------ |
 | `ts0 init`       | Create `ts0.json` and starter files in the cwd         |
-| `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild|
+| `ts0 build`      | Type-check with `tsc --noEmit`, then bundle via esbuild. Recurses into nested ts0 projects |
 | `ts0 run [file]` | Type-check, build, then run the entry point (or a specific file) |
-| `ts0 test [pat]` | Run tests via Node's built-in test runner              |
+| `ts0 test [pat]` | Run tests via Node's built-in test runner. Recurses into nested ts0 projects |
 
 ### Flags
 
@@ -330,6 +330,9 @@ fetch type declarations from the same URLs as the code.
     forcing `.ts` extensions on library source. Add an ambient declaration
     (e.g. `declare module "*.wgsl" { const s: string; export default s; }`) so
     loader imports type-check.
+- Test files are the exception: `ts0 test` hands them to Node, whose resolver
+    takes the specifier literally, so give their imports a real `.ts`/`.tsx`
+    extension even though the sources beside them need not.
 - `ts0 run` does not apply to this target (there is no single entry to run);
     use `ts0 build`. The single-file `outfile` option is likewise ignored —
     output always goes to `outdir`.
@@ -428,6 +431,11 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     type error anywhere fails the command and no tests run. `ts0 test --watch`
     re-type-checks and re-runs on every change (ts0 drives the watch loop itself
     rather than `node --test --watch`, so the check is never skipped).
+- **Nested projects:** a subdirectory with its own `ts0.json` is its own
+    project, and `ts0 build` / `ts0 test` recurse into every one of them, each
+    under its own config &mdash; to any depth. Nothing is skipped: a broken
+    nested project fails the parent. (`ts0 run` executes one entry, so it builds
+    only its own project.)
 
 ## License
 
