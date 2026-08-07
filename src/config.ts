@@ -50,6 +50,22 @@ export interface Ts0Config {
 	// matches assetDirs: ["people"].
 	assetDirs?: string[];
 
+	// HTML entries only: inline every referenced script and stylesheet into the
+	// HTML (default true). Set false to emit a normal multi-file static site
+	// instead: each referenced local script/stylesheet is bundled to its own
+	// file under `assetPath` and the tag keeps referencing it via src=/href=,
+	// so the bundles are independently cacheable.
+	inlineAssets?: boolean;
+
+	// HTML entries with `inlineAssets: false`: where the per-reference bundles
+	// go. Used VERBATIM as the URL prefix written into the HTML; the same
+	// string minus any leading `/` or `./` is the subdirectory under the HTML's
+	// own output directory. So "/assets" writes <outdir>/assets/main.js and
+	// emits src="/assets/main.js" -- the absolute form a single-page app needs,
+	// where a relative URL would resolve against the wrong directory on a deep
+	// link. Default "assets".
+	assetPath?: string;
+
 	// JSX support. Set `jsx` to enable JSX/TSX in both the type-checker and the
 	// bundler. Values follow esbuild's naming: "automatic" (modern runtime, no
 	// factory import needed; pair with `jsxImportSource`), "transform" (classic
@@ -155,6 +171,21 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 	if (config.assetDirs !== undefined) {
 		if (!Array.isArray(config.assetDirs) || !config.assetDirs.every((d: unknown) => typeof d === "string" && d.length > 0)) {
 			throw new Error("ts0: assetDirs must be an array of non-empty strings");
+		}
+	}
+
+	if (config.inlineAssets !== undefined && typeof config.inlineAssets !== "boolean") {
+		throw new Error("ts0: inlineAssets must be a boolean");
+	}
+
+	if (config.assetPath !== undefined) {
+		if (typeof config.assetPath !== "string" || config.assetPath.length === 0) {
+			throw new Error("ts0: assetPath must be a non-empty string");
+		}
+		// It resolves under the output directory; escaping it is a build error,
+		// not something to sanitize into something the author didn't write.
+		if (config.assetPath.split(/[\\/]/).includes("..")) {
+			throw new Error("ts0: assetPath must not contain \"..\"");
 		}
 	}
 
