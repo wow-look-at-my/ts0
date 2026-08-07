@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -16,8 +16,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Unit tests (runtime fetch interceptor)
-        run: node --experimental-strip-types --test src/runtime/fetch-interceptor.test.ts
+      - name: Unit tests
+        run: node --experimental-strip-types --test "src/**/*.test.ts"
 
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
@@ -30,7 +30,7 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -104,6 +104,18 @@ jobs:
           if ts0 build; then echo "FAIL: js-target build succeeded despite a type error"; exit 1; fi
           if [ -e dist ]; then echo "FAIL: js-target build wrote dist/ despite a type error"; exit 1; fi
           echo "js-target gate OK: no .js and no partial .d.ts emitted"
+          # An entry under a DOT-DIRECTORY is checked like any other. tsc's
+          # `**/*` never descends into one, so the gate names the entry
+          # explicitly; without that this builds green over a file the
+          # type-checker never saw.
+          dotdir=$(mktemp -d)
+          printf '%s\n' '{ "entry": ".github/scripts/step.ts", "outfile": "out/step.js", "target": "node" }' > "$dotdir/ts0.json"
+          mkdir -p "$dotdir/.github/scripts"
+          printf 'const n: number = "nope";\nexport { n };\n' > "$dotdir/.github/scripts/step.ts"
+          cd "$dotdir"
+          if ts0 build; then echo "FAIL: entry under a dot-directory built despite a type error"; exit 1; fi
+          if [ -e out ]; then echo "FAIL: entry under a dot-directory wrote out/ despite a type error"; exit 1; fi
+          echo "dot-directory entry gate OK: type-checked like any other entry"
 
       - name: Explicit any is a build error
         run: |
@@ -399,7 +411,7 @@ jobs:
 
   prebuilt:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -473,7 +485,7 @@ jobs:
   # skipped on every PR, so a change to it passed CI without being run once.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
