@@ -3,7 +3,7 @@ import { glob } from "node:fs/promises";
 import { watch as fsWatch } from "node:fs";
 import { join, extname } from "node:path";
 import { loadConfig } from "../config.ts";
-import { runTypecheck } from "./build.ts";
+import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
 
 export interface TestOptions {
 	pattern?: string;
@@ -13,57 +13,83 @@ export interface TestOptions {
 	configPath?: string;
 }
 
-export async function test(options: TestOptions = {}): Promise<void> {
-	const { config, rootDir } = loadConfig(options.configPath);
-	const pattern = options.pattern || config.test.pattern;
+// testProject type-checks ONE project and runs the test files it owns,
+// resolving with an exit code (0 = pass). It never exits the process: the
+// recursive caller needs every project's result, not the first failure's.
+async function testProject(configPath: string | undefined, patternOverride?: string): Promise<number> {
+	const { config, rootDir } = loadConfig(configPath);
+	const pattern = patternOverride || config.test.pattern;
 
-	const findTestFiles = async (): Promise<string[]> => {
-		const files: string[] = [];
-		for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
-			files.push(file);
-		}
-		return files;
+	// This project's discovery covers this project's files: the output dir,
+	// config.exclude'd trees and nested ts0 projects are left out, exactly as
+	// the gate leaves them out. A nested project's tests are NOT dropped --
+	// testTree runs them under their own config, where the gate can check
+	// them. Running them here would execute a program this gate never checked,
+	// under settings they were not written for.
+	//
+	// Filtering the results rather than the glob's `exclude` hook is
+	// deliberate: the hook is handed a mix of bare names and relative paths,
+	// while a result is always a path from rootDir.
+	const otherProjectDirs = typecheckExcludeDirs(config, rootDir).map((d) => d.split(/[\\/]/).join("/"));
+	const belongsToAnotherProject = (file: string): boolean => {
+		const rel = file.split(/[\\/]/).join("/");
+		return otherProjectDirs.some((d) => rel === d || rel.startsWith(`${d}/`));
 	};
 
+	const testFiles: string[] = [];
 	// The gate: type-check the whole project (sources AND tests) before running
 	// anything. Node's --experimental-strip-types only erases type annotations,
-	// it does NOT type-check, so without this a test run would execute an invalid
-	// program. Returns false (after printing the errors) on failure.
-	const typecheckPasses = async (): Promise<boolean> => {
-		const check = await runTypecheck(config, rootDir);
-		if (!check.success) {
-			console.error("Type-checking failed:");
-			console.error(check.output);
-			return false;
-		}
-		return true;
-	};
+	// it does NOT type-check, so without this a test run would execute an
+	// invalid program.
+	const check = await runTypecheck(config, rootDir);
+	if (!check.success) {
+		console.error("Type-checking failed:");
+		console.error(check.output);
+		return 1;
+	}
+	for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
+		if (!belongsToAnotherProject(file)) testFiles.push(file);
+	}
+	if (testFiles.length === 0) {
+		console.log(`No test files found matching: ${pattern}`);
+		return 0;
+	}
 
-	// Run the discovered tests once under Node's built-in runner; resolves with
-	// the exit code (0 = pass). Only ever called after typecheckPasses().
-	const runTests = (testFiles: string[]): Promise<number> => {
-		console.log(`Found ${testFiles.length} test file(s)\n`);
-		const child = spawn(
-			"node",
-			["--experimental-strip-types", "--test", ...testFiles.map((f) => join(rootDir, f))],
-			{ stdio: "inherit", cwd: rootDir },
-		);
-		return new Promise((resolve, reject) => {
-			child.on("close", (code) => resolve(code ?? 1));
-			child.on("error", reject);
-		});
-	};
+	console.log(`Found ${testFiles.length} test file(s)\n`);
+	const child = spawn("node", ["--experimental-strip-types", "--test", ...testFiles.map((f) => join(rootDir, f))], {
+		stdio: "inherit",
+		cwd: rootDir,
+	});
+	return new Promise((resolve, reject) => {
+		child.on("close", (code) => resolve(code ?? 1));
+		child.on("error", reject);
+	});
+}
+
+// testTree runs this project's tests and then those of every ts0 project
+// nested inside it, each under its OWN ts0.json -- so a nested project's tests
+// are checked by the gate that understands them instead of being left unrun.
+// Depth is unlimited (each nested run recurses in turn) and every project runs
+// even after one fails, because a suite that stops at the first failure hides
+// the rest. Resolves with the worst exit code seen.
+async function testTree(configPath: string | undefined, patternOverride?: string): Promise<number> {
+	let worst = await testProject(configPath, patternOverride);
+	const { rootDir } = loadConfig(configPath);
+	for (const dir of findNestedProjectDirs(rootDir)) {
+		console.log(`\n${dir}:`);
+		// The nested project's own test.pattern applies; only an explicit
+		// --pattern from the command line overrides it.
+		const code = await testTree(join(rootDir, dir, "ts0.json"), patternOverride);
+		if (code !== 0) worst = code;
+	}
+	return worst;
+}
+
+export async function test(options: TestOptions = {}): Promise<void> {
+	const { rootDir } = loadConfig(options.configPath);
 
 	if (!options.watch) {
-		// Type-check first; a type error anywhere in the project fails the run
-		// and no test process is spawned.
-		if (!(await typecheckPasses())) process.exit(1);
-		const testFiles = await findTestFiles();
-		if (testFiles.length === 0) {
-			console.log(`No test files found matching: ${pattern}`);
-			return;
-		}
-		const code = await runTests(testFiles);
+		const code = await testTree(options.configPath, options.pattern);
 		if (code !== 0) process.exit(code);
 		return;
 	}
@@ -77,17 +103,14 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	let queued = false;
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 
+	// Each cycle is the same full recursive pass as a one-shot run, so watching
+	// covers nested projects too -- the recursive fsWatch below already wakes on
+	// their files, and a cycle that re-ran only this project's tests would
+	// report green while a nested project sat broken.
 	const cycle = async (): Promise<void> => {
 		running = true;
 		try {
-			if (await typecheckPasses()) {
-				const testFiles = await findTestFiles();
-				if (testFiles.length === 0) {
-					console.log(`No test files found matching: ${pattern}`);
-				} else {
-					await runTests(testFiles);
-				}
-			}
+			await testTree(options.configPath, options.pattern);
 		} catch (err) {
 			console.error(err);
 		} finally {

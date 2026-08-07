@@ -44,6 +44,9 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		}
 	}
 
+	// selfOnly on both build() calls below: `ts0 build` and `ts0 test` recurse
+	// into nested ts0 projects, but `run` executes ONE entry, so it builds only
+	// the project that entry belongs to.
 	if (options.file) {
 		// Run specific file
 		const fileToRun = join(rootDir, options.file);
@@ -51,7 +54,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		if (options.noBuild) {
 			await runWithNode(fileToRun, options.args || [], true);
 		} else {
-			const result = await build({ configPath: options.configPath });
+			const result = await build({ configPath: options.configPath, selfOnly: true });
 			if (!result.success) {
 				console.error("Build failed:");
 				result.errors.forEach((e) => console.error(e));
@@ -73,7 +76,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 			const fileToRun = join(rootDir, config.entry);
 			await runWithNode(fileToRun, options.args || [], true);
 		} else {
-			const result = await build({ configPath: options.configPath });
+			const result = await build({ configPath: options.configPath, selfOnly: true });
 			if (!result.success) {
 				console.error("Build failed:");
 				result.errors.forEach((e) => console.error(e));
