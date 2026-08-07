@@ -87,13 +87,18 @@ file is picked up without touching the workflow:
 
 Everything else is a **behavioural suite** in `tests/*.dats`, run by
 [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
-`npm link`s it, installs bubblewrap plus the dats binary, and runs
-`dats test tests/`. Every test stages its project into its own sandbox
-(network off, so a build can never depend on one) and asserts what the build
-WROTE -- declarative `outputs.files` match/notMatch checks, with shell only for
+`npm link`s it, fetches the dats binary and runs the suites. Every test stages
+its project into its own directory and asserts what the build WROTE --
+declarative `outputs.files` match/notMatch checks, with shell only for
 properties that span files. A staged project gets the repo's `node_modules`
 symlinked in, the position it resolves `@types/node`/`preact` from when built
 in place.
+
+The files declare `network: false`, so a local run proves a build never needs
+one. **CI runs `--no-sandbox` and therefore does not**: the org's self-hosted
+runner denies unprivileged user namespaces, so bwrap cannot start and there is
+no docker fallback. Run the suites locally (with bwrap installed) to exercise
+the sandboxed contract.
 
 - `tests/cli.dats` -- `ts0 init` scaffolds a project that `build`, `run` and
     `test` then handle end to end; `--config <path>` builds a named config from
