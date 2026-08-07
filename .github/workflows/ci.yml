@@ -50,346 +50,40 @@ jobs:
       - name: Link ts0 globally
         run: npm link
 
-      - name: Test init command
-        working-directory: /tmp
+      # go-toolchain bundles dats and runs .dats suites itself, but it
+      # hard-requires a go.mod and this repo is TypeScript, so the binary is
+      # fetched directly -- a public buildhost download needing no auth.
+      - name: Install dats
         run: |
-          mkdir test-project
-          cd test-project
-          ts0 init
+          curl -fL --compressed "https://dl.pazer.build/dats?os=linux&arch=amd64" -o /usr/local/bin/dats
+          chmod +x /usr/local/bin/dats
+          dats --version
 
-      - name: Test build command
-        working-directory: /tmp/test-project
-        run: ts0 build
+      # Every behavioural assertion about the CLI lives in tests/*.dats:
+      # tests/cli.dats (init/build/run/test, --config), tests/gate.dats (the
+      # type-check gate and the explicit-any ban on every path),
+      # tests/samples.dats (every sample under samples/), and
+      # tests/html-referenced.dats (the multi-file HTML target). Each test
+      # stages its project into its own directory and asserts what the build
+      # wrote, so a failure names the file and the pattern.
+      #
+      # --no-sandbox because this runner denies unprivileged user namespaces
+      # (bwrap: "No permissions to create new namespace") and has no docker to
+      # fall back to. The cost is real and worth naming: the suites' declared
+      # `network: false` is inert here, so CI does NOT prove a build works
+      # offline -- a local `dats test tests/` on a machine with bwrap does.
+      # Confinement is not the loss: every test already works inside its own
+      # temp directory.
+      - name: Behaviour suites (dats)
+        run: dats --no-sandbox test tests/
 
-      - name: Test run command
-        working-directory: /tmp/test-project
-        run: ts0 run
-
-      - name: Test test command
-        working-directory: /tmp/test-project
-        run: ts0 test
-
-      - name: Type-check gate blocks broken output
+      # Not a test -- the assertions are in tests/samples.dats. This builds
+      # the two HTML samples into the workspace purely so the artifacts
+      # below exist for a human to download and open in a browser.
+      - name: Build html samples for the artifacts below
         run: |
-          # A type error must make EVERY code path -- build, run, run --no-build,
-          # and test -- fail and emit/execute nothing. This is the regression
-          # guard for "there must be no way to run an invalid program". The error
-          # (string assigned to number) strips to valid JS and the test file
-          # registers no tests, so a --no-build run or a test run would exit 0 if
-          # the type-check were ever skipped: this catches exactly that hole.
-          dir=$(mktemp -d)
-          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
-          mkdir -p "$dir/src"
-          printf 'const n: number = "nope";\nexport {};\n' > "$dir/src/main.ts"
-          printf 'export {};\n' > "$dir/src/noop.test.ts"
-          cd "$dir"
-          if ts0 build; then echo "FAIL: ts0 build succeeded despite a type error"; exit 1; fi
-          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite a type error"; exit 1; fi
-          if ts0 run; then echo "FAIL: ts0 run succeeded despite a type error"; exit 1; fi
-          if [ -e dist ]; then echo "FAIL: ts0 run wrote dist/ despite a type error"; exit 1; fi
-          if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite a type error"; exit 1; fi
-          if ts0 test; then echo "FAIL: ts0 test ran tests despite a type error"; exit 1; fi
-          echo "Type-check gate OK: build, run, run --no-build, and test all refused broken code"
-          # The same gate covers the js (library) target, including its
-          # declaration pass: a directory entry with a type error must emit
-          # NOTHING -- no .js tree and no partial .d.ts tree (declaration
-          # emit only runs after the gate passes, and is itself
-          # all-or-nothing via noEmitOnError).
-          jsdir=$(mktemp -d)
-          printf '%s\n' '{ "entry": "src", "target": "browser" }' > "$jsdir/ts0.json"
-          mkdir -p "$jsdir/src"
-          printf 'export const ok: number = 1;\n' > "$jsdir/src/good.ts"
-          printf 'export const n: number = "nope";\n' > "$jsdir/src/bad.ts"
-          cd "$jsdir"
-          if ts0 build; then echo "FAIL: js-target build succeeded despite a type error"; exit 1; fi
-          if [ -e dist ]; then echo "FAIL: js-target build wrote dist/ despite a type error"; exit 1; fi
-          echo "js-target gate OK: no .js and no partial .d.ts emitted"
-          # An entry under a DOT-DIRECTORY is checked like any other. tsc's
-          # `**/*` never descends into one, so the gate names the entry
-          # explicitly; without that this builds green over a file the
-          # type-checker never saw.
-          dotdir=$(mktemp -d)
-          printf '%s\n' '{ "entry": ".github/scripts/step.ts", "outfile": "out/step.js", "target": "node" }' > "$dotdir/ts0.json"
-          mkdir -p "$dotdir/.github/scripts"
-          printf 'const n: number = "nope";\nexport { n };\n' > "$dotdir/.github/scripts/step.ts"
-          cd "$dotdir"
-          if ts0 build; then echo "FAIL: entry under a dot-directory built despite a type error"; exit 1; fi
-          if [ -e out ]; then echo "FAIL: entry under a dot-directory wrote out/ despite a type error"; exit 1; fi
-          echo "dot-directory entry gate OK: type-checked like any other entry"
-
-      - name: Explicit any is a build error
-        run: |
-          # Explicit `any` is banned as hard as implicit `any`: it must fail
-          # every code path (build, run, run --no-build, test) and emit
-          # nothing. The program is otherwise valid TypeScript -- tsc has no
-          # flag for explicit `any`, so a skipped ban would build cleanly and
-          # this step is what catches that.
-          dir=$(mktemp -d)
-          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "strict": true }' > "$dir/ts0.json"
-          mkdir -p "$dir/src"
-          printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$dir/src/main.ts"
-          printf 'export {};\n' > "$dir/src/noop.test.ts"
-          cd "$dir"
-          if ts0 build; then echo "FAIL: ts0 build succeeded despite an explicit any"; exit 1; fi
-          if [ -e dist ]; then echo "FAIL: ts0 build wrote dist/ despite an explicit any"; exit 1; fi
-          if ts0 run; then echo "FAIL: ts0 run succeeded despite an explicit any"; exit 1; fi
-          if ts0 run --no-build; then echo "FAIL: ts0 run --no-build executed code despite an explicit any"; exit 1; fi
-          if ts0 test; then echo "FAIL: ts0 test ran tests despite an explicit any"; exit 1; fi
-          # Every spelling of it, and declaration files too (the gate's
-          # skipLibCheck means tsc never looks inside those).
-          for form in 'const a = 1 as any;' 'const a = <any>1;' 'const a: any[] = [];' 'let a: Promise<any>;' 'type A = any;'; do
-            printf 'export {};\n%s\nvoid 0;\n' "$form" > src/main.ts
-            if ts0 build; then echo "FAIL: ts0 build accepted: $form"; exit 1; fi
-          done
-          printf 'export const ok: number = 1;\n' > src/main.ts
-          printf 'declare module "*.frag" {\n\tconst src: any;\n\texport default src;\n}\n' > src/shim.d.ts
-          if ts0 build; then echo "FAIL: ts0 build accepted an explicit any in a .d.ts"; exit 1; fi
-          rm src/shim.d.ts
-          # ...and it must NOT fire on the word "any" outside a type: the ban
-          # is a real parse, not a text search, so identifiers, strings,
-          # comments, regexes and JSX text that merely read "any" still build.
-          printf '%s\n' '// a comment about any, as any, any[]' \
-            'const anyOf = 1;' \
-            'const bag = { any: 2, note: "as any" };' \
-            'const re = /any/;' \
-            'export const total = anyOf + bag.any + (re.test(bag.note) ? 1 : 0);' > src/main.ts
-          ts0 build
-          test -f dist/main.js
-          echo "Explicit-any gate OK: every any-typed form refused, look-alikes still build"
-
-      - name: Test basic sample
-        working-directory: samples/basic
-        run: |
-          ts0 build
-          ts0 test
-
-      - name: Test html sample
-        working-directory: samples/html
-        run: |
-          ts0 build
-          test -f dist/index.html
-          # The bundled output must inline the JS and CSS, with no remaining
-          # local src= or href= references to source files.
-          grep -q '<style' dist/index.html
-          grep -q 'getElementById' dist/index.html
-          ! grep -qE '<script[^>]+src=' dist/index.html
-          ! grep -qE '<link[^>]+rel=["'"'"']stylesheet["'"'"']' dist/index.html
-          # CSS asset embedding: the body's background-image url() must be
-          # rewritten to a data: URL so the bundle works from disk.
-          grep -q 'data:image/png;base64' dist/index.html
-          # Inline-module bundling: the inline <script type="module"> body
-          # imports ./src/greet.ts; the bundled output must contain the
-          # call site and resolved import.
-          grep -q 'greeting("inline")' dist/index.html
-          # Fetch interceptor injection: presence of the patched fetch and
-          # the embedded shader text, with no leftover __ASSETS_JSON__.
-          grep -q 'window.fetch' dist/index.html
-          grep -q 'embedded by ts0' dist/index.html
-          ! grep -q '__ASSETS_JSON__' dist/index.html
-          # CLI flag overrides: build a different entry to a different
-          # outfile without a ts0.json change.
-          rm -rf dist
-          ts0 build --entry index.html --outfile out/cli-flag.html
-          test -f out/cli-flag.html
-
-      - name: Test html-jsx sample
-        working-directory: samples/html-jsx
-        run: |
-          ts0 build
-          test -f dist/index.html
-          # JSX through an HTML entry must use the automatic Preact runtime,
-          # NOT esbuild's default classic transform. A Preact bundle that
-          # emits React.createElement throws "React is not defined" at
-          # runtime, so assert the classic factory is entirely absent and the
-          # preact/jsx-runtime module is bundled in.
-          ! grep -q 'React.createElement' dist/index.html
-          ! grep -q 'React.Fragment' dist/index.html
-          grep -q 'preact/jsx-runtime' dist/index.html
-          # The rendered component's text must survive bundling.
-          grep -q 'ts0 + Preact' dist/index.html
-          # JSX text containing the word "any" is prose, not a type: the
-          # explicit-any ban parses rather than text-searching, so this
-          # component builds and its tagline reaches the output.
-          grep -q 'any questions' dist/index.html
-
-      - name: Test js sample
-        working-directory: samples/js
-        run: |
-          # A nested project's tests only ever run when it is tested directly
-          # (the parent skips them -- it never type-checks them either), so
-          # this is the one thing that executes vec.test.ts. Without it a test
-          # file that bundles fine but cannot be RESOLVED at runtime -- an
-          # extensionless import Node's ESM loader rejects -- ships unnoticed.
-          ts0 test
-          ts0 build
-          # Directory entry -> "js" library target: every src/**/*.ts is
-          # compiled to a parallel dist/**/*.js, structure preserved.
-          test -f dist/math/vec.js
-          test -f dist/math/shape.js
-          test -f dist/gfx/shader.js
-          # Declaration files are not compiled to outputs.
-          ! test -e dist/shaders.js
-          # sourcemap:false in ts0.json -> no .map files.
-          ! test -e dist/math/vec.js.map
-          # ESM output.
-          grep -q 'export' dist/math/vec.js
-          # No duplication: add() is shared (vec.ts is an entry AND shape.ts
-          # imports it), so it must be emitted once into a chunk and imported,
-          # never inlined into each output. Assert the body lives in exactly one
-          # file, a chunk exists, and shape.js imports it rather than inlining.
-          test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
-          ls dist/chunk-*.js >/dev/null
-          grep -q 'chunk-' dist/math/shape.js
-          ! grep -q 'a\[0\] + b\[0\]' dist/math/shape.js
-          # loaders config: a non-shared .frag import is inlined as text
-          # (proves the text loader ran; a JS-module import would error).
-          grep -q 'FRAG_MARKER' dist/gfx/shader.js
-          # Declarations (default-on for the js target): every compiled
-          # module gets a parallel .d.ts mirroring the source tree.
-          test -f dist/index.d.ts
-          test -f dist/badge.d.ts
-          test -f dist/math/vec.d.ts
-          test -f dist/math/shape.d.ts
-          test -f dist/gfx/shader.d.ts
-          # .ts/.tsx extension specifiers are preserved in declaration output
-          # (consumers resolve them to the sibling .d.ts by extension
-          # substitution); extensionless imports stay extensionless.
-          grep -q '"./math/vec.ts"' dist/index.d.ts
-          grep -q '"./badge.tsx"' dist/index.d.ts
-          grep -q '"./vec"' dist/math/shape.d.ts
-          # The .tsx component's declaration types it via the configured
-          # jsxImportSource, and the loader-backed import erases to the
-          # annotated plain type (no leaked import of "./triangle.frag").
-          grep -q 'import("preact")' dist/badge.d.ts
-          grep -q 'triangleShader: string' dist/gfx/shader.d.ts
-          ! grep -q 'triangle.frag' dist/gfx/shader.d.ts
-          # Test files produce no output of either kind, and the ambient
-          # declaration source (src/shaders.d.ts) is not copied to dist.
-          ! test -e dist/math/vec.test.js
-          ! test -e dist/math/vec.test.d.ts
-          ! test -e dist/shaders.d.ts
-          # Shared chunks are esbuild artifacts, not source modules: the
-          # declaration tree mirrors sources, so chunks get NO .d.ts.
-          test -z "$(find dist -name 'chunk-*.d.ts')"
-          # sourcemap/shebang behavior is unchanged: no .d.ts.map files
-          # (declarationMap is never enabled), and no shebang on outputs.
-          test -z "$(find dist -name '*.d.ts.map')"
-          ! head -1 dist/index.js | grep -q '^#!'
-          # Determinism: rebuilding from the same input must produce
-          # byte-identical .d.ts (consumers commit fetched copies and rely
-          # on freshness diffs).
-          before=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
-          rm -rf dist
-          ts0 build
-          after=$(find dist -name '*.d.ts' -print0 | sort -z | xargs -0 sha256sum | sha256sum)
-          test "$before" = "$after"
-
-      - name: js target declarations opt-out
-        run: |
-          # "declarations": false must skip the .d.ts pass entirely while the
-          # .js tree still builds -- the escape hatch for projects that can't
-          # or don't want to ship declarations.
-          dir=$(mktemp -d)
-          printf '%s\n' '{ "entry": "src", "target": "browser", "declarations": false }' > "$dir/ts0.json"
-          mkdir -p "$dir/src"
-          printf 'export const one: number = 1;\n' > "$dir/src/one.ts"
-          cd "$dir"
-          ts0 build
-          test -f dist/one.js
-          test -z "$(find dist -name '*.d.ts')"
-          echo "Opt-out OK: .js emitted, no .d.ts"
-
-      - name: Test userscript sample (iife + globalName + preserveHeader)
-        working-directory: samples/userscript
-        run: |
-          ts0 build
-          test -f dist/main.user.js
-          # The ==UserScript== metadata header must survive byte-exactly at
-          # the very top of the bundle (esbuild strips comments; preserveHeader
-          # re-prepends the entry's leading comment block), exactly once.
-          head -1 dist/main.user.js | grep -qx '// ==UserScript=='
-          test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
-          test "$(grep -c '^// ==/UserScript==$' dist/main.user.js)" -eq 1
-          grep -q '^// @version      1.0$' dist/main.user.js
-          # Directly below the header sits the IIFE assigned to the configured
-          # global -- and the output is a plain script: no module statements,
-          # no shebang (that is a node-outfile convenience, never browser).
-          sed -n '8p' dist/main.user.js | grep -q '^var __USERSCRIPT_API'
-          ! grep -qE '^(import|export) ' dist/main.user.js
-          ! head -1 dist/main.user.js | grep -q '^#!'
-          # The extensionless ./lib/greet import both type-checked (browser
-          # targets are gate-checked with bundler resolution, matching
-          # esbuild) and got inlined into the bundle.
-          grep -q 'hello from a bundled' dist/main.user.js
-          # A rebuild must not stack a second header on top of the first.
-          ts0 build
-          test "$(grep -c '^// ==UserScript==$' dist/main.user.js)" -eq 1
-
-      - name: "Test bookmarklet sample (javascript: href bundling)"
-        working-directory: samples/bookmarklet
-        run: |
-          ts0 build
-          test -f dist/index.html
-          # The javascript:<file> href is replaced by javascript: plus the
-          # percent-encoded minified bundle; the raw file reference is gone.
-          ! grep -q 'javascript:./src/copy-title.ts' dist/index.html
-          grep -q 'href="javascript:(()%3D%3E' dist/index.html
-          # Decoding the href yields the bundled program (the ./lib/toast
-          # import must be inlined into it).
-          node -e '
-            const html = require("fs").readFileSync("dist/index.html", "utf8");
-            const href = html.match(/href="javascript:([^"]+)"/)[1];
-            const code = decodeURIComponent(href);
-            if (!code.includes("copied:")) throw new Error("entry code missing from decoded bookmarklet");
-            if (!code.includes("createElement")) throw new Error("lib import not inlined into bookmarklet");
-          '
-          # A real javascript: href (not a file reference) stays untouched,
-          # the rest of the page is preserved, and no fetch interceptor is
-          # injected (the page has no embeddable assets).
-          grep -q 'href="javascript:void(0)"' dist/index.html
-          grep -q 'BOOKMARKLET_PAGE_MARKER' dist/index.html
-          ! grep -q 'window.fetch' dist/index.html
-
-      - name: --config flag selects an explicit config file
-        run: |
-          # Multiple differently-configured builds in one repo: --config
-          # points at a named config; rootDir stays the config file's
-          # directory, so entry/outfile resolve exactly as a walk-up find
-          # would resolve them.
-          rm -rf samples/userscript/dist
-          ts0 build --config samples/userscript/ts0.json
-          test -f samples/userscript/dist/main.user.js
-          head -1 samples/userscript/dist/main.user.js | grep -qx '// ==UserScript=='
-
-      - name: exclude config limits the type-check gate
-        run: |
-          # A tree that type-checks under its own separate tsconfig (a test
-          # harness, an experiment dir) must be excludable from the gate --
-          # without exclude the build fails on it, with exclude it builds.
-          dir=$(mktemp -d)
-          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$dir/ts0.json"
-          mkdir -p "$dir/src" "$dir/junk"
-          printf 'export const ok: number = 1;\n' > "$dir/src/main.ts"
-          printf 'const n: number = "nope";\nexport {};\n' > "$dir/junk/broken.ts"
-          cd "$dir"
-          if ts0 build; then echo "FAIL: gate ignored junk/broken.ts"; exit 1; fi
-          printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm", "exclude": ["junk"] }' > ts0.json
-          ts0 build
-          test -f dist/main.js
-          echo "exclude OK: gate skipped the excluded dir, build unchanged"
-
-      # An HTML entry is type-checked like any other. This sample does not
-      # type-check, so the build MUST fail: HTML entries were once exempt and
-      # reported success regardless, which shipped type errors to the browser
-      # behind a "Type-checking..." line that had checked nothing.
-      - name: Type errors in an HTML entry fail the build
-        working-directory: samples/html-jsx-typeerror
-        run: |
-          if ts0 build; then
-            echo "::error::ts0 build succeeded on a project with a type error - HTML entries are being skipped again"
-            exit 1
-          fi
-          ts0 build 2>&1 | grep -q 'TS2322'
+          ts0 build --config samples/html/ts0.json
+          ts0 build --config samples/html-jsx/ts0.json
 
       - name: Upload html sample build
         if: always()
