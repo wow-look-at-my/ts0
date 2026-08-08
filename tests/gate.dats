@@ -230,11 +230,104 @@ tests:
 	# HTML entries were once exempt from the gate and reported success
 	# regardless, shipping type errors to the browser behind a
 	# "Type-checking..." line that had checked nothing.
+	#
+	# Staged inline rather than kept under samples/: build and test recurse
+	# into every nested ts0 project, so a permanently-broken one living in the
+	# tree would fail the repo's own build forever.
 	- desc: "a type error in an HTML entry fails the build"
-	  cmd: bash {shared.build.sh} {outputs.build.log} samples/html-jsx-typeerror
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
 	  exit: 1
+	  inputs:
+		files:
+			ts0.json: |
+				{ "entry": "index.html", "outdir": "dist", "target": "browser", "format": "esm", "strict": true }
+			index.html: |
+				<!DOCTYPE html>
+				<html lang="en">
+					<head>
+						<meta charset="utf-8" />
+						<title>HTML entry with a type error (expected to FAIL)</title>
+					</head>
+					<body>
+						<script type="module" src="./src/main.ts"></script>
+					</body>
+				</html>
+			src/main.ts: |
+				const answer: number = "forty-two";
+				console.log(answer);
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				ts0 build 2>&1 | tee "$1"
 	  outputs:
 		stdout:
 			- "TS2322"
 		"!files":
 			dist/index.html:
+
+	# Nested projects are RECURSED INTO, never skipped. A nested ts0.json means
+	# different settings (JSX, target, loaders), so the parent's gate cannot
+	# check that tree -- it delegates instead, building and testing it under its
+	# own config. Skipping it was the alternative, and it reports green over
+	# code nothing ever checked.
+	- desc: "a broken nested project fails the parent's build and test"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			src/main.ts: |
+				export const ok: number = 1;
+			nested/ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			nested/src/main.ts: |
+				export const ok: number = 1;
+			# Strips to valid JS and registers no tests, so an un-checked run
+			# of it would exit 0 -- only the nested gate rejects it.
+			nested/src/main.test.ts: |
+				const n: number = "nope";
+				export { n };
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				rm -rf dist nested/dist
+				if ts0 build; then echo "FAIL: build passed over a broken nested project"; exit 1; fi
+				if ts0 test; then echo "FAIL: test passed over a broken nested project"; exit 1; fi
+				# The parent's own build still ran; only the nested one refused.
+				test -f dist/main.js
+				if [ -e nested/dist ]; then echo "FAIL: nested project emitted output"; exit 1; fi
+				ts0 build 2>&1 | tee "$1" || true
+				echo "recursion OK: the nested project was entered and refused" | tee -a "$1"
+	  outputs:
+		stdout:
+			- "TS2322"
+			- "recursion OK: the nested project was entered and refused"
+
+	- desc: "a clean nested project is built and tested by the parent"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			src/main.ts: |
+				export const ok: number = 1;
+			nested/ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			nested/src/main.ts: |
+				export const ok: number = 1;
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				rm -rf dist nested/dist
+				ts0 build 2>&1 | tee "$1"
+				ts0 test 2>&1 | tee -a "$1"
+				echo "recursion OK: both projects built" | tee -a "$1"
+	  outputs:
+		stdout:
+			- "recursion OK: both projects built"
+		files:
+			dist/main.js:
+			nested/dist/main.js:
