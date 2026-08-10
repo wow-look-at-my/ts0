@@ -1,0 +1,4 @@
+.widget {
+	border-radius: 12px;
+	backdrop-filter: blur(3px);
+}
