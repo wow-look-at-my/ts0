@@ -30,7 +30,11 @@ jobs:
 
   test:
     needs: build
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # bwrap cannot get an unprivileged user namespace on the plain wow-linux
+    # pool at all (the runner's own container lacks the capability, confirmed
+    # live -- not a fixable kernel sysctl), so the dats step below falls back
+    # to its docker backend; that needs a runner with a docker daemon.
+    runs-on: ${{ vars.CI_RUNNER_DIND || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
