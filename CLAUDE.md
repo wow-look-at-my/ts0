@@ -603,8 +603,12 @@ in build-js.ts):
 
 ## Distributing
 
-Two consumption paths, for two kinds of consumer:
+Three consumption paths:
 
+- **`action.yml` (repo root) for GitHub Actions consumers.** `uses:
+    wow-look-at-my/ts0@master` with an `args:` input downloads and runs the
+    prebuilt `ts0.cjs` below in one step &mdash; see the README's "GitHub
+    Actions" section.
 - **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
     Machines with stock Node but no npm/node_modules/git &mdash;
     webhook-runner's `//go:generate` step, CI images, containers &mdash;

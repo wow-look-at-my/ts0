@@ -69,6 +69,28 @@ Node-target globals &mdash; still needs its own `node_modules` (installed
 however you like). Browser-target and dependency-free projects build with
 `ts0.cjs` alone.
 
+### GitHub Actions
+
+`wow-look-at-my/ts0@master` is a composite action: it downloads the newest
+`ts0.cjs` from buildhost's master branch (never a pinned version to drift
+behind &mdash; see "Version pinning" above) and runs it, so a workflow doesn't
+have to hand-roll the download.
+
+```yaml
+- uses: wow-look-at-my/ts0@master
+  with:
+    args: build
+```
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `args` | Yes | &mdash; | Arguments passed to `ts0` |
+| `working-directory` | No | `.` | Directory to run `ts0` from |
+| `branch` | No | `master` | Branch to resolve the newest build from |
+| `version` | No | &mdash; | Pin an immutable release (e.g. `v35`); overrides `branch` |
+
+Outputs `path`, the full path to the downloaded `ts0.cjs`.
+
 ## Quick start
 
 ```sh
