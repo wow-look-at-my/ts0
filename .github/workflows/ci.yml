@@ -62,17 +62,16 @@ jobs:
       # stages its project into its own directory and asserts what the build
       # wrote, so a failure names the file and the pattern.
       #
-      # --no-sandbox because this runner denies unprivileged user namespaces
-      # (bwrap: "No permissions to create new namespace") and has no docker to
-      # fall back to. The cost is real and worth naming: the suites' declared
-      # `network: false` is inert here, so CI does NOT prove a build works
-      # offline -- a local `dats test tests/` on a machine with bwrap does.
-      # Confinement is not the loss: every test already works inside its own
-      # temp directory.
+      # No explicit path: dats recursively finds every *.dats file from the
+      # cwd down when none is given, and this repo has no .dats files outside
+      # tests/, so it's equivalent to naming the directory -- minus having to
+      # keep this step in sync if a suite ever moves. Real (bubblewrap)
+      # sandboxing, not --no-sandbox: the wow-look-at-my/dats@master action
+      # makes sure bwrap actually works on this runner first.
       - name: Behaviour suites (dats)
         uses: wow-look-at-my/dats@master
         with:
-          args: --no-sandbox test tests/
+          args: test
 
       # Not a test -- the assertions are in tests/samples.dats. This builds
       # the two HTML samples into the workspace purely so the artifacts
