@@ -4,6 +4,7 @@ import { dirname, resolve, basename, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Ts0Config } from "../config.ts";
 import type { BuildResult } from "./build.ts";
+import { formatEsbuildDiagnostic } from "../reporter.ts";
 
 // Loaders applied when bundling CSS, so that url(./fonts/foo.woff2) and
 // url(./img/bar.png) get embedded as data: URLs instead of left as relative
@@ -612,11 +613,11 @@ function escapeForStyle(css: string): string {
 	return css.replace(/<\/style/gi, "<\\/style");
 }
 
+// Same tsc-style shape formatEsbuildDiagnostic produces for the other
+// targets, so reporter.ts's colorizeErrorBlock can find a file/line to
+// annotate in an HTML build's errors too, not just the default target's.
 function formatEsbuildMessage(msg: esbuild.Message): string {
-	if (msg.location) {
-		return `${msg.location.file}:${msg.location.line}:${msg.location.column}: ${msg.text}`;
-	}
-	return msg.text;
+	return formatEsbuildDiagnostic(msg, "error");
 }
 
 function formatBuildError(err: unknown, filePath: string): string {

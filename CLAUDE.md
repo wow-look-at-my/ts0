@@ -17,6 +17,7 @@ user-facing documentation.
 src/
     cli.ts              # entry point - arg parsing and command dispatch
     config.ts           # ts0.json loader, defaults, entry auto-detection
+    reporter.ts         # GitHub Actions ::error::/::warning:: annotations + ANSI coloring
     commands/
         init.ts         # scaffolds ts0.json + src/ + package.json
         build.ts        # type-check gate (runTypecheck) + declaration emit (emitDeclarations) + esbuild bundle (dispatches HTML/js)
@@ -100,16 +101,6 @@ Everything else is a **behavioural suite** in `tests/*.dats`, run by
 `npm link`s it, fetches the dats binary and runs the suites. Every test stages
 its project into its own directory and asserts what the build WROTE --
 declarative `outputs.files` match/notMatch checks, with shell only for
-properties that span files. A staged project gets the repo's `node_modules`
-symlinked in, the position it resolves `@types/node`/`preact` from when built
-in place.
-
-Everything else is a **behavioural suite** in `tests/*.dats`, run by
-[dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
-`npm link`s it, installs bubblewrap plus the dats binary, and runs
-`dats test tests/`. Every test stages its project into its own sandbox
-(network off, so a build can never depend on one) and asserts what the build
-WROTE -- declarative `outputs.files` match/notMatch checks, with shell only for
 properties that span files. A staged project gets the repo's `node_modules`
 symlinked in, the position it resolves `@types/node`/`preact` from when built
 in place.
@@ -199,24 +190,6 @@ the sandboxed contract.
     inline-module bundling, the fetch interceptor with no leftover
     `__ASSETS_JSON__`) and the CLI `--entry`/`--outfile` overrides; `html-jsx`
     (automatic Preact runtime, no `React.createElement`, and a JSX tagline
-    reading "any questions" that must survive); `js` (tree mirrored, shared code
-    execute nothing, for the node target, the js (directory) target (no `.js`
-    tree, no partial `.d.ts`) and an entry under a **dot-directory** alike --
-    the last one is the case tsc's `**/*` never reaches on its own. The fixtures are shaped so a skipped
-    check would look fine: the error strips to valid JS and the test file
-    registers no tests, so `--no-build` and `test` would exit 0 if the gate were
-    bypassed. Then the explicit-`any` ban across every spelling (`x: any`,
-    `as any`, `<any>`, `any[]`, `Promise<any>`, `type A = any`, and an `any`
-    inside a `.d.ts`), the look-alikes that must still build (identifiers,
-    object keys, strings, comments, regexes reading "any" -- the guard that the
-    ban stays a parse), `exclude` limiting the gate without changing the build,
-    and a type error in an **HTML** entry failing the build (they were once
-    exempt and reported success regardless).
-- `tests/samples.dats` -- one test per sample: `basic` (build + `ts0 test`);
-    `html` (JS/CSS inlined into one document, `url()` rewritten to `data:`,
-    inline-module bundling, the fetch interceptor with no leftover
-    `__ASSETS_JSON__`) and the CLI `--entry`/`--outfile` overrides; `html-jsx`
-    (automatic Preact runtime, no `React.createElement`, and a JSX tagline
     reading "any questions" that must survive); `js` (`ts0 test` first &mdash;
     which EXECUTES `vec.test.ts` and so catches an import that bundles but that
     Node cannot resolve at run time &mdash; then tree mirrored, shared code
@@ -253,6 +226,14 @@ If you change CLI behavior, update the relevant `samples/*` and the matching
     abstraction &mdash; the whole point is that ts0 stays small.
 - **Argument parsing:** `src/cli.ts` parses `process.argv` by hand. New commands
     should follow the same pattern (no new dependency).
+
+## Output: colors + GitHub Actions annotations
+
+`reporter.ts` is the one place that formats a diagnostic for display: ANSI
+color (forced on under `GITHUB_ACTIONS=true`, since its log viewer renders
+color despite stdout being a pipe) and `::error::`/`::warning::` annotations
+(no-op outside Actions). Depth, including why esbuild's own logging is off:
+`docs/reporter.md`.
 
 ## Configuration model
 
@@ -622,8 +603,12 @@ in build-js.ts):
 
 ## Distributing
 
-Two consumption paths, for two kinds of consumer:
+Three consumption paths:
 
+- **`action.yml` (repo root) for GitHub Actions consumers.** `uses:
+    wow-look-at-my/ts0@master` with an `args:` input downloads and runs the
+    prebuilt `ts0.cjs` below in one step &mdash; see the README's "GitHub
+    Actions" section.
 - **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
     Machines with stock Node but no npm/node_modules/git &mdash;
     webhook-runner's `//go:generate` step, CI images, containers &mdash;

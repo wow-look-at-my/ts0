@@ -2,6 +2,7 @@ import { build } from "./commands/build.ts";
 import { run } from "./commands/run.ts";
 import { test } from "./commands/test.ts";
 import { init } from "./commands/init.ts";
+import { colors, colorizeErrorBlock } from "./reporter.ts";
 
 const HELP = `
 ts0 - Simple TypeScript framework
@@ -104,12 +105,16 @@ async function main() {
 				configPath: getOption("config"),
 			});
 
+			const c = colors();
+			if (result.warnings?.length) {
+				result.warnings.forEach((w) => console.error(colorizeErrorBlock(w, "warning")));
+			}
 			if (!hasFlag("watch", "w")) {
 				if (result.success) {
-					console.log(`Built in ${result.duration.toFixed(0)}ms`);
+					console.log(c.green(`Built in ${result.duration.toFixed(0)}ms`));
 				} else {
-					console.error("Build failed:");
-					result.errors.forEach((e) => console.error(e));
+					console.error(c.red("Build failed:"));
+					result.errors.forEach((e) => console.error(colorizeErrorBlock(e)));
 					process.exit(1);
 				}
 			}
@@ -141,7 +146,7 @@ async function main() {
 		}
 
 		default:
-			console.error(`Unknown command: ${command}`);
+			console.error(colors().red(`Unknown command: ${command}`));
 			console.log(HELP);
 			process.exit(1);
 	}
