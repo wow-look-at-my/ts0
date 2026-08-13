@@ -53,12 +53,7 @@ jobs:
       # go-toolchain bundles dats and runs .dats suites itself, but it
       # hard-requires a go.mod and this repo is TypeScript, so the binary is
       # fetched directly -- a public buildhost download needing no auth.
-      - name: Install dats
-        run: |
-          curl -fL --compressed "https://dl.pazer.build/dats?os=linux&arch=amd64" -o /usr/local/bin/dats
-          chmod +x /usr/local/bin/dats
-          dats --version
-
+      #
       # Every behavioural assertion about the CLI lives in tests/*.dats:
       # tests/cli.dats (init/build/run/test, --config), tests/gate.dats (the
       # type-check gate and the explicit-any ban on every path),
@@ -75,7 +70,9 @@ jobs:
       # Confinement is not the loss: every test already works inside its own
       # temp directory.
       - name: Behaviour suites (dats)
-        run: dats --no-sandbox test tests/
+        uses: wow-look-at-my/actions@dats#latest
+        with:
+          args: --no-sandbox test tests/
 
       # Not a test -- the assertions are in tests/samples.dats. This builds
       # the two HTML samples into the workspace purely so the artifacts
