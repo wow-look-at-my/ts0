@@ -7,7 +7,6 @@
 # tests, so `run --no-build` and `test` would exit 0 if the gate were ever
 # bypassed. See CLAUDE.md, "Type-checking".
 sandbox:
-	enabled: true
 	network: false
 
 shared:

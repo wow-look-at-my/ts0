@@ -1,0 +1,44 @@
+name: Run ts0
+description: Download ts0 from buildhost and run it, without a caller having to hand-roll the download
+
+inputs:
+  args:
+    description: 'Arguments to pass to ts0 (e.g. "build", "test", "build --entry src/demo/main.tsx --outfile dist-demo/assets/app.js")'
+    required: true
+  working-directory:
+    description: 'Directory to run ts0 from'
+    required: false
+    default: '.'
+  branch:
+    description: 'ts0 branch to resolve the newest build from. ts0 is a build TOOL, not a pinned dependency: this defaults to master (always current), never an immutable version.'
+    required: false
+    default: 'master'
+  version:
+    description: 'ts0 release version to download (e.g. v35); overrides branch when set, for the rare case reproducible output matters more than tracking latest'
+    required: false
+    default: ''
+
+outputs:
+  path:
+    description: 'Full path to the downloaded ts0.cjs'
+    value: ${{ steps.download.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    # os/arch default to the runner's own platform; ts0.cjs is the same
+    # platform-neutral file for every os/arch pair (buildhost-download still
+    # requires the params, but any supported pair returns identical bytes).
+    - name: Download ts0
+      id: download
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      with:
+        project: ts0
+        branch: ${{ inputs.version == '' && inputs.branch || '' }}
+        version: ${{ inputs.version }}
+
+    - name: Run ts0
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        node "${{ steps.download.outputs.path }}" ${{ inputs.args }}
