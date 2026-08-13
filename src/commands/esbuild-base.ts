@@ -9,6 +9,12 @@ import type { Ts0Config } from "../config.ts";
 export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 	return {
 		bundle: true,
+		// ts0 reports esbuild's errors/warnings itself (formatted, colorized,
+		// annotated -- see reporter.ts), from the same `result.errors`/
+		// `.warnings` this call already returns. esbuild's own default log level
+		// prints a second, uncoordinated copy straight to the terminal; silence
+		// that copy so there's exactly one report per diagnostic.
+		logLevel: "silent",
 		platform: config.target === "node" ? "node" : "browser",
 		format: config.format,
 		// The IIFE's exports-object global (only meaningful for format

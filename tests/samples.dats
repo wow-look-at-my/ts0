@@ -7,7 +7,6 @@
 # bind-mounted read-only in the sandbox, and outputs.files addresses paths
 # under that directory. No network -- a build must never need one.
 sandbox:
-	enabled: true
 	network: false
 
 shared:
