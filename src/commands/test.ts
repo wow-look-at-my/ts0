@@ -4,6 +4,7 @@ import { watch as fsWatch } from "node:fs";
 import { join, extname } from "node:path";
 import { loadConfig } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
+import { colors, colorizeErrorBlock, colorizeTestLine, pipeColorized } from "../reporter.ts";
 
 export interface TestOptions {
 	pattern?: string;
@@ -43,8 +44,8 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 	// invalid program.
 	const check = await runTypecheck(config, rootDir);
 	if (!check.success) {
-		console.error("Type-checking failed:");
-		console.error(check.output);
+		console.error(colors().red("Type-checking failed:"));
+		console.error(colorizeErrorBlock(check.output));
 		return 1;
 	}
 	for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
@@ -57,9 +58,15 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 
 	console.log(`Found ${testFiles.length} test file(s)\n`);
 	const child = spawn("node", ["--experimental-strip-types", "--test", ...testFiles.map((f) => join(rootDir, f))], {
-		stdio: "inherit",
+		stdio: ["inherit", "pipe", "pipe"],
 		cwd: rootDir,
 	});
+	// stdout/stderr are piped rather than inherited so ts0 can recolor
+	// node --test's TAP output (green "ok", red "not ok" + a GitHub Actions
+	// annotation) as it streams -- "inherit" would hand the fd straight to the
+	// terminal, bypassing ts0 entirely.
+	pipeColorized(child.stdout, colorizeTestLine);
+	pipeColorized(child.stderr, colorizeTestLine, process.stderr);
 	return new Promise((resolve, reject) => {
 		child.on("close", (code) => resolve(code ?? 1));
 		child.on("error", reject);

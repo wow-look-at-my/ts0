@@ -109,6 +109,13 @@ ts0 test --watch           # watch mode tests
 ts0 build --watch          # rebuild on change
 ```
 
+### Output
+
+Errors are red, warnings yellow, and a passing test's `ok` is green (a TTY, or
+`FORCE_COLOR`/`NO_COLOR` to override; color is always on under
+`GITHUB_ACTIONS=true`). Under GitHub Actions, a type-check/build error or a
+failing test is also reported as an `::error::` log annotation.
+
 ## Configuration
 
 `ts0` reads `ts0.json` from the current directory (or any ancestor). Every field is
