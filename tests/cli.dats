@@ -8,7 +8,6 @@
 # @types/node from when a project is built inside the repo. What is under test
 # is the scaffolding and the three commands, not npm.
 sandbox:
-	enabled: true
 	network: false
 
 tests:

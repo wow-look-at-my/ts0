@@ -6,11 +6,15 @@ import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 import { checkNoExplicitAny } from "./explicit-any.ts";
+import { formatEsbuildDiagnostic } from "../reporter.ts";
 
 export interface BuildResult {
 	success: boolean;
 	outputFiles: string[];
 	errors: string[];
+	// esbuild warnings (e.g. an unused import), formatted like errors. Absent
+	// or empty on a target that hasn't been wired up to report them.
+	warnings?: string[];
 	duration: number;
 }
 
@@ -45,6 +49,7 @@ export async function build(options?: {
 
 	const outputFiles = [...self.outputFiles];
 	const errors = [...self.errors];
+	const warnings = [...(self.warnings ?? [])];
 	let success = self.success;
 
 	for (const dir of nested) {
@@ -54,10 +59,11 @@ export async function build(options?: {
 		const result = await build({ watch: options?.watch, configPath: join(rootDir, dir, "ts0.json") });
 		outputFiles.push(...result.outputFiles);
 		errors.push(...result.errors.map((e) => `${dir}: ${e}`));
+		warnings.push(...(result.warnings ?? []).map((w) => `${dir}: ${w}`));
 		if (!result.success) success = false;
 	}
 
-	return { success, outputFiles, errors, duration: performance.now() - startTime };
+	return { success, outputFiles, errors, warnings, duration: performance.now() - startTime };
 }
 
 async function buildSelf(options?: {
@@ -169,7 +175,8 @@ async function buildSelf(options?: {
 		return {
 			success: result.errors.length === 0,
 			outputFiles,
-			errors: result.errors.map((e) => e.text),
+			errors: result.errors.map((e) => formatEsbuildDiagnostic(e, "error")),
+			warnings: result.warnings.map((w) => formatEsbuildDiagnostic(w, "warning")),
 			duration: performance.now() - startTime,
 		};
 	} catch (err) {
@@ -177,7 +184,7 @@ async function buildSelf(options?: {
 		return {
 			success: false,
 			outputFiles: [],
-			errors: error.errors?.map((e) => e.text) || [String(err)],
+			errors: error.errors?.map((e) => formatEsbuildDiagnostic(e, "error")) || [String(err)],
 			duration: performance.now() - startTime,
 		};
 	}

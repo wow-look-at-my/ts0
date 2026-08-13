@@ -4,6 +4,7 @@ import { loadConfig } from "../config.ts";
 import { build, runTypecheck } from "./build.ts";
 import { isHtmlEntry } from "./build-html.ts";
 import { isJsTarget } from "./build-js.ts";
+import { colors, colorizeErrorBlock } from "../reporter.ts";
 
 export interface RunOptions {
 	// Skip build step (use for development with --experimental-strip-types)
@@ -38,8 +39,8 @@ export async function run(options: RunOptions = {}): Promise<void> {
 	if (options.noBuild) {
 		const check = await runTypecheck(config, rootDir);
 		if (!check.success) {
-			console.error("Type-checking failed:");
-			console.error(check.output);
+			console.error(colors().red("Type-checking failed:"));
+			console.error(colorizeErrorBlock(check.output));
 			process.exit(1);
 		}
 	}
@@ -56,8 +57,8 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		} else {
 			const result = await build({ configPath: options.configPath, selfOnly: true });
 			if (!result.success) {
-				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(e));
+				console.error(colors().red("Build failed:"));
+				result.errors.forEach((e) => console.error(colorizeErrorBlock(e)));
 				process.exit(1);
 			}
 			// For specific files with outfile config, still need outdir
@@ -78,8 +79,8 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		} else {
 			const result = await build({ configPath: options.configPath, selfOnly: true });
 			if (!result.success) {
-				console.error("Build failed:");
-				result.errors.forEach((e) => console.error(e));
+				console.error(colors().red("Build failed:"));
+				result.errors.forEach((e) => console.error(colorizeErrorBlock(e)));
 				process.exit(1);
 			}
 			// Use outfile if specified, otherwise derive from outdir

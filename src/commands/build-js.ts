@@ -4,6 +4,7 @@ import { readdirSync, statSync, existsSync } from "node:fs";
 import type { Ts0Config } from "../config.ts";
 import { emitDeclarations, typecheckPlugin, type BuildResult } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
+import { formatEsbuildDiagnostic } from "../reporter.ts";
 
 // isJsTarget reports whether the configured entry selects the "js" library
 // target: a *directory* of TypeScript modules compiled in place — every file
@@ -166,7 +167,8 @@ export async function buildJs(
 		return {
 			success: result.errors.length === 0,
 			outputFiles: result.outputFiles?.map((f) => f.path) ?? [],
-			errors: result.errors.map((e) => e.text),
+			errors: result.errors.map((e) => formatEsbuildDiagnostic(e, "error")),
+			warnings: result.warnings.map((w) => formatEsbuildDiagnostic(w, "warning")),
 			duration: performance.now() - startTime,
 		};
 	} catch (err) {
@@ -174,7 +176,7 @@ export async function buildJs(
 		return {
 			success: false,
 			outputFiles: [],
-			errors: error.errors?.map((e) => e.text) || [String(err)],
+			errors: error.errors?.map((e) => formatEsbuildDiagnostic(e, "error")) || [String(err)],
 			duration: performance.now() - startTime,
 		};
 	}
