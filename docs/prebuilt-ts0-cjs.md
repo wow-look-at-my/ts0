@@ -11,12 +11,22 @@ How the pieces fit:
 
 - **The bundle** (`src/prebuilt/main.ts` &rarr; `ts0.cjs`): the CLI, the
     esbuild JS API, and the ENTIRE TypeScript compiler (pure JS) in one file.
-    The compiler API (`lib/typescript.js`) and every `lib/lib.*.d.ts`
-    standard library are embedded as strings via the generated
-    `ts0-prebuilt-assets` virtual module (an esbuild plugin injects it at
-    package time; `src/prebuilt/prebuilt-assets.d.ts` is the ambient
-    declaration that keeps the repo type-check happy without it). ~12 MiB
-    total, ~2 MiB gzipped on the wire.
+    The compiler API (`lib/typescript.js`), every `lib/lib.*.d.ts` standard
+    library, and the whole `@types/node` package are embedded as strings via
+    the generated `ts0-prebuilt-assets` virtual module (an esbuild plugin
+    injects it at package time; `src/prebuilt/prebuilt-assets.d.ts` is the
+    ambient declaration that keeps the repo type-check happy without it).
+    ~14 MiB total, ~2 MiB gzipped on the wire.
+- **`@types/node` ships embedded too**, so a Node-target project type-checks
+    with no `@types/node` install of its own. `commands/build.ts`'s
+    `generatedCompilerOptions` sets `typeRoots` to the extracted
+    `node_modules/@types` (resolved via `nodeTypeRootsDir`, the same
+    `createRequire(import.meta.url)` trick `runTsc` uses for `typescript`)
+    plus the consumer's own `node_modules/@types`, so an explicit install
+    still resolves too -- it is just never required. `@types/node` is a
+    regular `dependencies` entry (not `devDependencies`) precisely because
+    every consumption path, including a plain `npm install`, needs it
+    resolvable from ts0's own installed tree.
 - **The compiler is embedded ONCE.** The npm package ships it twice --
     `lib/typescript.js` (the API) and `lib/_tsc.js` (the same compiler
     rebuilt as a CLI, reached through `bin/tsc` &rarr; `lib/tsc.js`) -- and
@@ -74,14 +84,21 @@ How the pieces fit:
     are byte-identical to what npm installs; there is no esbuild-wasm
     fallback (deliberate &mdash; not worth the weight).
 - **npm-path invariant**: the prebuilt machinery lives entirely in
-    `src/prebuilt/` + the packaging script. The only shared-source change is
-    quoting in `runTsc`'s exec string (spaced paths). The npm/git-install
-    path must never notice the prebuilt exists.
+    `src/prebuilt/` + the packaging script. The shared-source changes are
+    quoting in `runTsc`'s exec string (spaced paths) and `nodeTypeRootsDir`'s
+    `createRequire(import.meta.url).resolve(...)` in `build.ts` -- both
+    resolve relative to wherever the running code actually lives, so they
+    behave identically on the npm/git-install path (ts0's own
+    `node_modules`) and the prebuilt path (the extraction cache), with no
+    prebuilt-specific branch. The npm/git-install path must never notice the
+    prebuilt exists.
 - **What must stay in sync when deps bump**: the typescript embed list in
     `embeddedFiles` (`lib/typescript.js` + `lib/lib.*.d.ts` is a
     TypeScript-5.x layout, and the generated `bin/tsc` driver depends on the
     `executeCommandLine` runtime export &mdash; the script throws at package
-    time if either moves); the esbuild version is read from the lockfile and baked
+    time if either moves); the whole `@types/node` package (walked
+    recursively, so a version bump adding/removing files needs no list edit);
+    the esbuild version is read from the lockfile and baked
     into both the native-fetch URL and the buildhost project name
     (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
     new natives project on the next master merge.

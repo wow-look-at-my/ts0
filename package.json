@@ -17,11 +17,11 @@
 		"src/runtime/fetch-interceptor.js"
 	],
 	"dependencies": {
+		"@types/node": "^22.0.0",
 		"esbuild": "^0.28.1",
 		"typescript": "^5.7.0"
 	},
 	"devDependencies": {
-		"@types/node": "^22.0.0",
 		"preact": "^10.25.4"
 	},
 	"engines": {
