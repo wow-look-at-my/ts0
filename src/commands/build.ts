@@ -1,12 +1,25 @@
 import * as esbuild from "esbuild";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { readdirSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 import { checkNoExplicitAny } from "./explicit-any.ts";
 import { formatEsbuildDiagnostic } from "../reporter.ts";
+
+const require = createRequire(import.meta.url);
+
+// nodeTypeRootsDir resolves the directory holding the @types packages ts0
+// ships with (@types/node), the same way runTsc resolves the typescript
+// binary from ts0's own dependencies -- via createRequire(import.meta.url),
+// which the prebuilt bundle rewrites to the extraction cache. A Node-target
+// project then type-checks with no @types/node install of its own, on every
+// consumption path (prebuilt, npm/git install, running from source).
+function nodeTypeRootsDir(): string {
+	return dirname(dirname(require.resolve("@types/node/package.json")));
+}
 
 export interface BuildResult {
 	success: boolean;
@@ -257,8 +270,11 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 // - `lib` depends on target: browser code -- an explicit "browser" target or
 //   any HTML entry (always browser) -- needs the DOM lib so document/fetch/
 //   addEventListener and friends resolve. Node code gets the ESNext lib only;
-//   its globals come from @types/node. Without this, every HTML/browser
-//   project would fail type-checking on "Cannot find name 'document'".
+//   its globals (console, process, node:fs, ...) come from @types/node, which
+//   ts0 ships with itself via `typeRoots` (nodeTypeRootsDir) -- a Node-target
+//   project needs no @types/node install of its own. Without the DOM lib,
+//   every HTML/browser project would fail type-checking on "Cannot find name
+//   'document'".
 // - Bundler-consumed code gets bundler module resolution: the js (library)
 //   target AND any browser-target/HTML entry are compiled by esbuild, so the
 //   gate checks with the resolution the bundler actually uses -- permitting
@@ -283,6 +299,12 @@ function generatedCompilerOptions(config: Ts0Config, rootDir: string): Record<st
 		esModuleInterop: true,
 		allowImportingTsExtensions: true,
 	};
+	if (!isBrowser) {
+		// The consumer's own node_modules/@types stays in the search too, so an
+		// explicit @types/node install (or another @types package) still resolves;
+		// ts0's bundled copy is what makes that install unnecessary, not forbidden.
+		compilerOptions.typeRoots = [nodeTypeRootsDir(), join(rootDir, "node_modules", "@types")];
+	}
 	if (config.jsx) {
 		compilerOptions.jsx = tsconfigJsx(config.jsx);
 		if (config.jsxImportSource) {

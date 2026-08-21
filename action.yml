@@ -3,7 +3,11 @@ description: Download ts0 from buildhost and run it, without a caller having to 
 
 inputs:
   args:
-    description: 'Arguments to pass to ts0 (e.g. "build", "test", "build --entry src/demo/main.tsx --outfile dist-demo/assets/app.js")'
+    description: 'Arguments to pass to ts0. One line per invocation, so a caller
+      needing several ts0 runs (e.g. building a node-target config, then a
+      browser-target one) gets them all from one `uses:` step and one
+      download, instead of repeating the whole action: "build", "test", or
+      multiple lines like "build --config ts0.scripts.json\nbuild".'
     required: true
   working-directory:
     description: 'Directory to run ts0 from'
@@ -41,4 +45,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        node "${{ steps.download.outputs.path }}" ${{ inputs.args }}
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          node "${{ steps.download.outputs.path }}" $line
+        done <<< "${{ inputs.args }}"
