@@ -1,0 +1,7 @@
+:root {
+	--sample-marker: EXTERNAL_STYLESHEET_MARKER;
+}
+
+body {
+	font-family: system-ui, sans-serif;
+}

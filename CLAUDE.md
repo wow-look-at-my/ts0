@@ -42,6 +42,7 @@ samples/
     js/                 # directory-entry "js" library target sample (CI)
     userscript/         # iife + globalName + preserveHeader sample (CI)
     bookmarklet/        # HTML entry with a javascript: bookmarklet href (CI)
+    external-css/       # `external` keeps a CSS-module import a reference (CI)
 tests/                  # dats behavioural suites (all of CI's assertions)
     cli.dats            # init/build/run/test, --config
     gate.dats           # type-check gate + explicit-`any` ban, every path
@@ -196,11 +197,18 @@ the sandboxed contract.
     deduped into a chunk rather than copied, `.frag` text loader, the parallel
     `.d.ts` tree with `.ts`/`.tsx` specifiers preserved, no `.d.ts` for tests or
     chunks, no `.d.ts.map`, and byte-identical declarations across a rebuild)
-    plus the `"declarations": false` opt-out; `userscript` (the `==UserScript==`
+    plus the `"declarations": false` opt-out and the `"bundleShared": false`
+    inverse (the same sample built both ways: chunk + single shared body by
+    default, then zero chunks with the body copied into each importer);
+    `userscript` (the `==UserScript==`
     header byte-exact at the top, exactly once, stable across a rebuild, IIFE on
     the configured global, no module statements, no shebang); `bookmarklet` (the
     `javascript:<file>` href percent-encoded and decoding back to the bundled
-    program, a real `javascript:void(0)` href untouched).
+    program, a real `javascript:void(0)` href untouched); `external-css` (the
+    `with { type: "css" }` import emitted verbatim, the stylesheet text absent
+    from every emitted file, a neighbouring ordinary import still bundled) plus
+    its guardrail &mdash; the same program WITHOUT `external` must fail the
+    build and write nothing, since silent inlining would defeat the feature.
 - `tests/html-referenced.dats` -- the multi-file HTML target
     (`inlineAssets: false`): the shell plus one bundle per reference under
     `assetPath`, nothing inlined, references rewritten, the external stylesheet
@@ -551,14 +559,45 @@ Code shared across entries is **deduplicated**, not duplicated: `splitting: true
 once into a chunk and import it, rather than inlining a copy into every output.
 A consumer still imports a single entry file — the browser fetches any shared
 chunk transitively. Non-shared local imports and loader-backed imports (`.wgsl`
-text, etc.) stay inlined. The `esbuild` escape hatch can set `splitting: false`
-to force self-contained (duplicating) outputs.
+text, etc.) stay inlined. `"bundleShared": false` turns splitting off to force
+self-contained (duplicating) outputs — a first-class option, NOT the `esbuild`
+escape hatch, which is slated for removal along with esbuild itself. Splitting is
+only expressible for `esm`, so other formats duplicate regardless.
 
 It is mutually exclusive with the HTML target and the default single-entry
 target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
 single entry to run). The non-output esbuild options (platform, format, jsx, …)
 come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
 default target so the two can't drift.
+
+## External imports (`external`)
+
+`external` lists import specifiers that stay **references** in the output: the
+import statement is emitted verbatim and the target's contents are never pulled
+in. It is threaded through `baseEsbuildOptions()`, so the single-entry and js
+targets both honor it — "this import is resolved at runtime" is a property of
+the code, not of which target compiles it.
+
+The motivating case is a CSS module script
+(`import s from "./x.css" with { type: "css" }`), which the browser resolves and
+constructs itself; also peer dependencies a library must not embed, and import-map
+entries.
+
+- **It is ts0 vocabulary, not an esbuild passthrough.** The `esbuild` escape
+    hatch and esbuild itself are slated for removal; `external` is defined in
+    terms of import specifiers and must survive a bundler swap. Do not
+    reintroduce it as a raw passthrough or document it in esbuild's terms.
+- **It must never become a way to silence an unsupported import.** An import
+    the bundler cannot handle and that is NOT listed in `external` has to keep
+    failing the build, with nothing written. That hard failure is the whole
+    guardrail: silent inlining would put stylesheet text into the JS and defeat
+    the feature. `tests/samples.dats` carries "an unsupported CSS-type import
+    errors instead of silently inlining" specifically to keep this honest — if
+    that test ever starts passing, the guardrail is gone.
+- Matching is by specifier as written (`"./styles.css"`, `"lit"`, `"*.css"`
+    with `*` matching any run of characters), never by resolved file path.
+- External imports are still type-checked; the sample pairs one with an ambient
+    `declare module "*.css"`.
 
 Type-checking for this target uses `moduleResolution: "Bundler"` (see
 "Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text), set
