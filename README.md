@@ -182,6 +182,8 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `jsxImportSource` | `string`        | &mdash;            | Module the automatic runtime imports from, e.g. `"preact"` or `"react"`. Only used when `jsx` is `"automatic"`. |
 | `loaders`   | `object`              | &mdash;            | Map file extensions to loader names (`text`, `dataurl`, `base64`, `binary`, `file`, `json`, …), e.g. `{ ".wgsl": "text" }`. The friendly way to import non-JS/TS files; applies to the default and js targets. |
 | `declarations` | `boolean`          | `true`             | js (library) target only: emit a parallel `*.d.ts` tree into `outdir` alongside the compiled `*.js` (see [Type declarations](#type-declarations)). Set `false` to skip. Ignored by the single-entry and HTML targets. |
+| `external`  | `string[]`            | &mdash;            | Import specifiers that stay **external references** in the output instead of being bundled, e.g. `["*.css"]` or `["lit"]`. The import statement is emitted verbatim and the file's contents appear nowhere in the output (see [External imports](#external-imports)). Applies to the default and js targets. |
+| `bundleShared` | `boolean`          | `true`             | js (library) target: may code shared by two or more outputs be factored into a shared chunk they import. Set `false` to make every emitted module fully self-contained (shared code is duplicated into each). |
 | `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
 When `outfile` is set with a Node target, `ts0` produces a single executable file
@@ -350,9 +352,10 @@ fetch type declarations from the same URLs as the code.
     into each output. A consumer still writes a single import; the browser
     fetches any shared chunk transitively. Loader-backed imports (e.g. `import
     src from "./shader.wgsl"`, enabled by the `loaders` field above) and
-    non-shared local imports stay inlined in the importing module. Pass
-    `"esbuild": { "splitting": false }` to force fully self-contained outputs
-    (with duplication) instead.
+    non-shared local imports stay inlined in the importing module. Set
+    `"bundleShared": false` to force fully self-contained outputs (with
+    duplication) instead — the right trade only when outputs are consumed in
+    isolation, where fetching a sibling chunk isn't possible.
 - Declaration files (`*.d.ts`) and tests (`*.test.*`, `*.spec.*`) are skipped.
 - Type-checking uses **bundler** module resolution (matching esbuild), so
     extensionless relative imports and loader-backed imports type-check without
@@ -403,6 +406,52 @@ types, and TypeScript pairs them up automatically.
     build with `TS6059` (esbuild can inline such an import into the `.js`, but
     a mirrored `.d.ts` tree cannot represent it). Move the file under the
     entry directory or set `"declarations": false`.
+
+### External imports
+
+By default every import is resolved and bundled at build time. Some imports must
+**not** be — they are meant to be resolved at runtime, by the browser or by the
+consumer. `external` lists those specifiers: the `import` statement is emitted
+verbatim and the imported file's contents appear nowhere in the output.
+
+The motivating case is a CSS module script, where the browser constructs the
+stylesheet itself:
+
+```json
+{
+    "entry": "src/main.ts",
+    "outfile": "dist/main.js",
+    "target": "browser",
+    "external": ["*.css"]
+}
+```
+
+```ts
+import styles from "./styles.css" with { type: "css" };
+
+document.adoptedStyleSheets = [styles];
+```
+
+The bundle keeps that line exactly as written — import attributes included — and
+ships no stylesheet text. Other uses: a peer dependency a library must not embed
+(`["lit"]`), or anything supplied by an import map.
+
+- **Matching is by specifier, not by file path.** Entries are compared against
+    the specifier as written: `"./styles.css"` externalizes that relative
+    import, `"lit"` externalizes the bare package, and `*` matches any run of
+    characters, so `"*.css"` covers every CSS import in the project.
+- **It is per-specifier, not a blanket opt-out.** Ordinary imports sitting next
+    to an externalized one bundle exactly as before.
+- **Types still apply.** An external import is type-checked like any other, so
+    give it an ambient declaration:
+    `declare module "*.css" { const sheet: CSSStyleSheet; export default sheet; }`.
+- **It is not a way to silence an unsupported import.** An import ts0 cannot
+    handle and that is *not* listed here still fails the build, loudly, with
+    nothing written. That red build is the guardrail: it is what stops a
+    stylesheet from being quietly inlined into your JavaScript.
+- Applies to the single-entry target and the [js library target](#js-library-target).
+
+See `samples/external-css` for a complete example.
 
 ### JSX / TSX
 

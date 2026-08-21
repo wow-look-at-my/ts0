@@ -34,5 +34,11 @@ export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 		// Custom loaders (e.g. { ".wgsl": "text" }). Spread before the caller's
 		// `config.esbuild` so an explicit esbuild.loader can still override.
 		...(config.loaders && { loader: config.loaders as { [ext: string]: esbuild.Loader } }),
+		// Imports that stay external references in the output: the import
+		// statement is emitted verbatim and the target's contents are never
+		// pulled in. Shared by both targets, since "this import is resolved at
+		// runtime, not at build time" is a property of the code, not of which
+		// target compiles it.
+		...(config.external?.length && { external: config.external }),
 	};
 }

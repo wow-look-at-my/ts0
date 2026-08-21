@@ -125,11 +125,12 @@ export async function buildJs(
 		outbase: srcDir,
 		...baseEsbuildOptions(config),
 		// Deduplicate code shared across entry points into chunks instead of
-		// inlining a copy into each output. esbuild only supports splitting for
-		// esm; for other formats fall back to (duplicating) inlined output.
-		...(config.format === "esm" && { splitting: true }),
-		// User overrides (escape hatch — e.g. loader: { ".wgsl": "text" }, or
-		// splitting: false to force self-contained outputs).
+		// inlining a copy into each output -- unless `bundleShared: false` asks
+		// for self-contained outputs. Chunking is only expressible for esm
+		// output; other formats fall back to (duplicating) inlined output
+		// regardless.
+		...(config.format === "esm" && config.bundleShared !== false && { splitting: true }),
+		// User overrides (escape hatch - e.g. loader: { ".wgsl": "text" }).
 		...config.esbuild,
 	};
 
