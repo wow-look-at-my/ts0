@@ -82,24 +82,14 @@ have to hand-roll the download.
     args: build
 ```
 
-A project needing several ts0 runs (e.g. a node-target config, then a
-browser-target one) passes each invocation on its own line, in one step:
-
-```yaml
-- uses: wow-look-at-my/ts0@master
-  with:
-    args: |
-      build --config ts0.scripts.json
-      build
-```
-
-`ts0.cjs` is downloaded once and each line runs against that same download, in
-order &mdash; so the caller never repeats the `uses:` step just to invoke ts0
-again.
+A project needing several build targets (e.g. a node-target helper script,
+alongside a browser-target bundle) does not need several `uses:` steps: give
+each target its own `ts0.json` and let one `args: build` build all of them (see
+"Nested projects" below).
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `args` | Yes | &mdash; | Arguments passed to `ts0`, one invocation per line |
+| `args` | Yes | &mdash; | Arguments passed to `ts0` |
 | `working-directory` | No | `.` | Directory to run `ts0` from |
 | `branch` | No | `master` | Branch to resolve the newest build from |
 | `version` | No | &mdash; | Pin an immutable release (e.g. `v35`); overrides `branch` |
