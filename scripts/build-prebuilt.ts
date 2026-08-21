@@ -30,7 +30,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 const BUILD_ID_PLACEHOLDER = "TS0-PREBUILT-BUILD-ID-PLACEHOLDER-1f2e3d4c";
 
@@ -154,8 +154,10 @@ ts.executeCommandLine(ts.sys, () => {}, ts.sys.args);
 // embeddedFiles collects the text files inlined into ts0.cjs, keyed by their
 // cache-relative extraction path: the pruned typescript package (the compiler
 // API, the standard libraries, and the generated bin/tsc driver above --
-// tsserver, the CLI rebuild, and the locale directories are never shipped)
-// and the fetch-interceptor template.
+// tsserver, the CLI rebuild, and the locale directories are never shipped),
+// the whole @types/node package (so a Node-target project type-checks with
+// no @types/node install of its own -- see nodeTypeRootsDir in
+// commands/build.ts), and the fetch-interceptor template.
 function embeddedFiles(): Record<string, string> {
 	const files: Record<string, string> = {};
 	const put = (key: string, from: string): void => {
@@ -180,6 +182,15 @@ function embeddedFiles(): Record<string, string> {
 	const libFiles = readdirSync(join(tsDir, "lib")).filter((f) => f.startsWith("lib.") && f.endsWith(".d.ts"));
 	if (libFiles.length === 0) throw new Error("no lib.*.d.ts found in typescript/lib");
 	for (const f of libFiles) put(`node_modules/typescript/lib/${f}`, join(tsDir, "lib", f));
+
+	const nodeTypesDir = dirname(requireLocal.resolve("@types/node/package.json"));
+	const nodeTypesFiles = (readdirSync(nodeTypesDir, { recursive: true }) as string[]).filter(
+		(rel) => rel === "package.json" || rel.endsWith(".d.ts"),
+	);
+	if (nodeTypesFiles.length === 0) throw new Error("no .d.ts found in @types/node");
+	for (const rel of nodeTypesFiles) {
+		put(`node_modules/@types/node/${rel.split(sep).join("/")}`, join(nodeTypesDir, rel));
+	}
 
 	return files;
 }
