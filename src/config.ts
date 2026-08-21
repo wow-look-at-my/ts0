@@ -112,6 +112,37 @@ export interface Ts0Config {
 	// type-checks.)
 	loaders?: Record<string, string>;
 
+	// Import specifiers that stay EXTERNAL references in the output instead of
+	// being bundled or inlined: the `import ... from "<specifier>"` statement is
+	// emitted verbatim and the imported file's contents appear nowhere in the
+	// output. This is what a runtime-resolved import needs -- a CSS module
+	// script (`import styles from "./styles.css" with { type: "css" }`, resolved
+	// by the browser), an import map entry, a peer dependency a library must not
+	// embed.
+	//
+	// Entries are matched the way an import specifier is written, not as file
+	// paths: "./styles.css" externalizes that relative specifier, "lit"
+	// externalizes the bare package, and a "*" wildcard matches any run of
+	// characters ("*.css" externalizes every CSS import). Relative specifiers
+	// are resolved relative to the importing module, exactly as written.
+	//
+	// Applies to the single-entry target and the js (library) target. It is
+	// deliberately NOT a way to silence an unsupported import: an import ts0
+	// cannot handle and that is not listed here still fails the build.
+	external?: string[];
+
+	// Whether code shared by more than one output module may be factored into a
+	// shared chunk that the outputs import (default true). Only the js (library)
+	// target emits more than one module, so only it is affected; the
+	// single-entry and HTML targets always produce one self-contained bundle.
+	//
+	// Set false to force every emitted module to be fully self-contained: shared
+	// code is copied into each output that uses it, so a consumer fetching one
+	// output file needs no sibling chunk. That costs duplication, which is the
+	// right trade only when outputs are consumed in isolation (a snippet pasted
+	// somewhere, a file served on its own).
+	bundleShared?: boolean;
+
 	// Additional esbuild options (raw escape hatch). Merged last, so an
 	// esbuild.loader here overrides `loaders` above.
 	esbuild?: Record<string, unknown>;
@@ -206,6 +237,16 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 		if (!ok) {
 			throw new Error("ts0: loaders must be an object mapping file extensions to loader names");
 		}
+	}
+
+	if (config.external !== undefined) {
+		if (!Array.isArray(config.external) || !config.external.every((s: unknown) => typeof s === "string" && s.length > 0)) {
+			throw new Error("ts0: external must be an array of non-empty import specifiers");
+		}
+	}
+
+	if (config.bundleShared !== undefined && typeof config.bundleShared !== "boolean") {
+		throw new Error("ts0: bundleShared must be a boolean");
 	}
 
 	// Auto-detect entry if not specified

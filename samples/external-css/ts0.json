@@ -1,0 +1,7 @@
+{
+	"entry": "src/main.ts",
+	"outfile": "dist/main.js",
+	"target": "browser",
+	"sourcemap": false,
+	"external": ["*.css"]
+}

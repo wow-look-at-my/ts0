@@ -195,6 +195,48 @@ tests:
 			dist/math/vec.test.js:
 			dist/math/vec.test.d.ts:
 
+	- desc: "bundleShared false makes every js output self-contained"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" samples/js
+				# Default: add() is shared (vec.ts is an entry AND shape.ts
+				# imports it), so its body lives in exactly one file -- a chunk.
+				ts0 build 2>&1 | tee "$1"
+				test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
+				ls dist/chunk-*.js >/dev/null
+				# bundleShared:false inverts exactly that: no chunks at all, and
+				# the shared body is copied into each output that uses it, so a
+				# consumer fetching one file needs no sibling.
+				node {inputs.opt-out.js}
+				rm -rf dist
+				ts0 build 2>&1 | tee -a "$1"
+				test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -gt 1
+				test -z "$(find dist -name 'chunk-*.js')"
+				# Self-contained means self-contained: nothing may import a chunk.
+				test -z "$(grep -rl 'from "\./chunk-' dist)"
+				echo "bundleShared OK: no chunks, shared code inlined per output"
+			# Written as an edit of the sample's own config so the ONLY
+			# difference from the default run above is the one field.
+			opt-out.js: |
+				const fs = require("fs");
+				const c = JSON.parse(fs.readFileSync("ts0.json", "utf8"));
+				c.bundleShared = false;
+				fs.writeFileSync("ts0.json", JSON.stringify(c, null, "\t") + "\n");
+	  outputs:
+		stdout:
+			- "bundleShared OK"
+		files:
+			dist/math/shape.js:
+				match:
+					# The shared body is now inlined here rather than imported.
+					- 'a\[0\] \+ b\[0\]'
+				notMatch:
+					- 'chunk-'
+
 	- desc: "declarations false emits the js tree with no .d.ts"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
 	  inputs:
@@ -252,6 +294,90 @@ tests:
 					# that is a node convenience and would corrupt the header.
 					- '(?m)^(import|export) '
 					- '#!/usr/bin/env node'
+
+	- desc: "external-css sample keeps the CSS import a reference, never inlined"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" samples/external-css
+				ts0 build 2>&1 | tee "$1"
+				# The stylesheet is a separate file the BROWSER fetches, so it
+				# must survive as a real file reference, not as bundled text.
+				# grep -r over the whole output dir: the CSS could only leak by
+				# landing in some emitted file, and this catches any of them.
+				test -z "$(grep -rl 'EXTERNAL_STYLESHEET_MARKER' dist)"
+				echo "external OK: import emitted verbatim, stylesheet text absent"
+	  outputs:
+		stdout:
+			- "external OK"
+		files:
+			dist/main.js:
+				match:
+					# The import statement, byte-for-byte as written -- import
+					# attributes and all. A runtime-resolved import that lost
+					# its `with { type: "css" }` would throw in the browser.
+					- 'import styles from "\./styles\.css" with \{ type: "css" \}'
+					# `external` is per-specifier, not a blanket opt-out: an
+					# ordinary local import next to it still bundles normally.
+					- 'EXTERNAL_CSS_SAMPLE_THEME'
+				notMatch:
+					# The declaration is a build-time artifact only.
+					- 'declare module'
+		"!files":
+			# Nothing may emit the stylesheet as a sibling output either --
+			# "external" means the build does not handle this file at all.
+			dist/styles.css:
+
+	- desc: "an unsupported CSS-type import errors instead of silently inlining"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			# The same program as the sample, minus the `external` entry. A
+			# `with { type: "css" }` import ts0 cannot handle MUST fail loudly:
+			# the red build is what keeps stylesheet text out of the JS. If this
+			# ever starts passing, the import is being inlined behind the
+			# author's back and the feature above is pointless.
+			ts0.json: |
+				{
+					"entry": "src/main.ts",
+					"outfile": "dist/main.js",
+					"target": "browser",
+					"sourcemap": false
+				}
+			src/css.d.ts: |
+				declare module "*.css" {
+					const sheet: CSSStyleSheet;
+					export default sheet;
+				}
+			src/styles.css: |
+				:root { --sample-marker: EXTERNAL_STYLESHEET_MARKER; }
+			src/main.ts: |
+				import styles from "./styles.css" with { type: "css" };
+				document.adoptedStyleSheets = [styles];
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				# Must fail, and must write nothing at all.
+				if ts0 build >"$1" 2>&1; then
+					echo "FAIL: unmarked css-type import built successfully" | tee -a "$1"
+					exit 1
+				fi
+				test ! -d dist
+				echo "unsupported OK: build failed, nothing emitted"
+	  outputs:
+		stdout:
+			- "unsupported OK"
+		files:
+			build.log:
+				match:
+					- 'type attribute'
+				notMatch:
+					# It must be a build error, not a silent success.
+					- 'Built in'
 
 	- desc: "bookmarklet sample encodes a javascript: href into a real bookmarklet"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
