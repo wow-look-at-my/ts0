@@ -82,6 +82,11 @@ have to hand-roll the download.
     args: build
 ```
 
+A project needing several build targets (e.g. a node-target helper script,
+alongside a browser-target bundle) does not need several `uses:` steps: give
+each target its own `ts0.json` and let one `args: build` build all of them (see
+"Nested projects" below).
+
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `args` | Yes | &mdash; | Arguments passed to `ts0` |
