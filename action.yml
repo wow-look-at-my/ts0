@@ -1,22 +1,17 @@
 name: Run ts0
-description: Download ts0 from buildhost and run it, without a caller having to hand-roll the download
+description: Type-check, test and build a ts0 project, without a caller having to hand-roll the download
 
+# There is deliberately no input for WHAT to run. ts0 in CI means one thing:
+# type-check, test, build -- in that order, every time. A command input makes
+# the workflow author the one who decides what "ts0 ran" means, and a command
+# can be `--help`: exit 0, nothing checked, nothing tested, nothing built, and
+# a green check for it. A caller with a genuinely different target gives it its
+# own ts0.json -- `build` recurses into every nested project.
 inputs:
-  args:
-    description: 'Arguments to pass to ts0 (e.g. "build", "test", "build --entry src/demo/main.tsx --outfile dist-demo/assets/app.js")'
-    required: true
   working-directory:
     description: 'Directory to run ts0 from'
     required: false
     default: '.'
-  branch:
-    description: 'ts0 branch to resolve the newest build from. ts0 is a build TOOL, not a pinned dependency: this defaults to master (always current), never an immutable version.'
-    required: false
-    default: 'master'
-  version:
-    description: 'ts0 release version to download (e.g. v35); overrides branch when set, for the rare case reproducible output matters more than tracking latest'
-    required: false
-    default: ''
 
 outputs:
   path:
@@ -37,8 +32,19 @@ runs:
         branch: ${{ inputs.version == '' && inputs.branch || '' }}
         version: ${{ inputs.version }}
 
-    - name: Run ts0
+    # `test` type-checks the whole project (and bans explicit `any`) before it
+    # discovers a single test file, so this is the gate even in a project with
+    # no tests yet -- there it type-checks and reports none found.
+    - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: |
-        node "${{ steps.download.outputs.path }}" ${{ inputs.args }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" test
+
+    - name: ts0 build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" build
