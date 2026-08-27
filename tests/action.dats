@@ -46,6 +46,13 @@ tests:
 					exit 1
 				}
 
+				# Every input the steps read must be declared. An undeclared one
+				# expands to the empty string, so the step keeps running and
+				# silently does something other than what it reads like.
+				for ref in $(grep -oE 'inputs\.[a-z-]+' "$action" | cut -d. -f2 | sort -u); do
+					grep -qE "^  $ref:" "$action" || { echo "steps read an undeclared input: $ref"; exit 1; }
+				done
+
 				echo "action OK: always test then build, no command input"
 	  outputs:
 		stdout:

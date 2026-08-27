@@ -12,6 +12,14 @@ inputs:
     description: 'Directory to run ts0 from'
     required: false
     default: '.'
+  branch:
+    description: 'ts0 branch to resolve the newest build from. ts0 is a build TOOL, not a pinned dependency: this defaults to master (always current), never an immutable version.'
+    required: false
+    default: 'master'
+  version:
+    description: 'ts0 release version to download (e.g. v35); overrides branch when set, for the rare case reproducible output matters more than tracking latest'
+    required: false
+    default: ''
 
 outputs:
   path:
