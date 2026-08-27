@@ -1,10 +1,13 @@
 name: Run ts0
-description: Download ts0 from buildhost and run it, without a caller having to hand-roll the download
+description: Type-check, test and build a ts0 project, without a caller having to hand-roll the download
 
+# There is deliberately no input for WHAT to run. ts0 in CI means one thing:
+# type-check, test, build -- in that order, every time. A free-form argument
+# input made the workflow author the one who decides what "ts0 ran" means, and
+# `args: --help` exits 0 with nothing checked, nothing tested and nothing built:
+# a green check for no work. A caller with a genuinely different target gives it
+# its own ts0.json -- `build` recurses into every nested project.
 inputs:
-  args:
-    description: 'Arguments to pass to ts0 (e.g. "build", "test", "build --entry src/demo/main.tsx --outfile dist-demo/assets/app.js")'
-    required: true
   working-directory:
     description: 'Directory to run ts0 from'
     required: false
@@ -17,6 +20,10 @@ inputs:
     description: 'ts0 release version to download (e.g. v35); overrides branch when set, for the rare case reproducible output matters more than tracking latest'
     required: false
     default: ''
+  args:
+    description: 'REMOVED -- passing this fails the step. ts0 always type-checks, tests and builds; there is nothing to choose. Delete the input.'
+    required: false
+    default: ''
 
 outputs:
   path:
@@ -26,6 +33,22 @@ outputs:
 runs:
   using: composite
   steps:
+    # An undeclared input is only a warning, so `args` stays declared purely to
+    # turn a stale caller into a named failure carrying the fix, rather than a
+    # silent change in what the step does.
+    - name: Reject the removed args input
+      if: ${{ inputs.args != '' }}
+      shell: bash
+      env:
+        SUPPLIED: ${{ inputs.args }}
+      run: |
+        echo "::error title=ts0: remove the args input::args: ${SUPPLIED}"
+        echo "The args input was removed: this action always runs 'ts0 test' then" >&2
+        echo "'ts0 build', so there is nothing to pass. Delete the input. A build" >&2
+        echo "with different settings belongs in its own ts0.json -- build recurses" >&2
+        echo "into every nested project." >&2
+        exit 1
+
     # os/arch default to the runner's own platform; ts0.cjs is the same
     # platform-neutral file for every os/arch pair (buildhost-download still
     # requires the params, but any supported pair returns identical bytes).
@@ -37,8 +60,19 @@ runs:
         branch: ${{ inputs.version == '' && inputs.branch || '' }}
         version: ${{ inputs.version }}
 
-    - name: Run ts0
+    # `test` type-checks the whole project (and bans explicit `any`) before it
+    # discovers a single test file, so this is the gate even in a project with
+    # no tests yet -- there it type-checks and reports none found.
+    - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: |
-        node "${{ steps.download.outputs.path }}" ${{ inputs.args }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" test
+
+    - name: ts0 build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" build

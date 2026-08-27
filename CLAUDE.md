@@ -48,6 +48,7 @@ tests/                  # dats behavioural suites (all of CI's assertions)
     gate.dats           # type-check gate + explicit-`any` ban, every path
     samples.dats        # every sample under samples/
     html-referenced.dats # the multi-file HTML target
+    action.dats         # action.yml: always test then build, no command input
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
@@ -518,9 +519,13 @@ in build-js.ts):
 Three consumption paths:
 
 - **`action.yml` (repo root) for GitHub Actions consumers.** `uses:
-    wow-look-at-my/ts0@master` with an `args:` input downloads and runs the
-    prebuilt `ts0.cjs` below in one step &mdash; see the README's "GitHub
-    Actions" section.
+    wow-look-at-my/ts0@master`, with no inputs, downloads the prebuilt
+    `ts0.cjs` below and runs `test` then `build` &mdash; see the README's
+    "GitHub Actions" section. It takes **no command input**: a caller choosing
+    the command is what made `args: --help` a green check for zero work, so
+    `args` now exists only to fail a stale caller. `tests/action.dats` asserts
+    both commands still run, in that order, and that no `node` line in the
+    action interpolates an expression. Keep it that way.
 - **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
     Machines with stock Node but no npm/node_modules/git &mdash;
     webhook-runner's `//go:generate` step, CI images, containers &mdash;
