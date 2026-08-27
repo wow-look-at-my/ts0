@@ -522,10 +522,10 @@ Three consumption paths:
     wow-look-at-my/ts0@master`, with no inputs, downloads the prebuilt
     `ts0.cjs` below and runs `test` then `build` &mdash; see the README's
     "GitHub Actions" section. It takes **no command input**: a caller choosing
-    the command is what made `args: --help` a green check for zero work, so
-    `args` now exists only to fail a stale caller. `tests/action.dats` asserts
-    both commands still run, in that order, and that no `node` line in the
-    action interpolates an expression. Keep it that way.
+    the command can choose `--help`, a green check for zero work.
+    `tests/action.dats` asserts both commands still run, in that order, that no
+    `node` line in the action interpolates an expression, and that the input
+    set is exactly working-directory/branch/version. Keep it that way.
 - **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
     Machines with stock Node but no npm/node_modules/git &mdash;
     webhook-runner's `//go:generate` step, CI images, containers &mdash;

@@ -83,9 +83,9 @@ so a workflow doesn't have to hand-roll the download. It takes no arguments:
 **There is no input for which command to run**, deliberately. `test`
 type-checks the whole project and bans explicit `any` before running the tests
 (and type-checks even when a project has none yet); `build` type-checks again
-before it emits. Letting the workflow choose meant `args: --help` &mdash; exit
-0, nothing checked, nothing tested, nothing built, and a green check for it.
-Passing `args` now fails the step with that explanation.
+before it emits. Letting the workflow choose the command lets it choose
+`--help` &mdash; exit 0, nothing checked, nothing tested, nothing built, and a
+green check for it.
 
 A project needing several build targets (e.g. a node-target helper script,
 alongside a browser-target bundle) still needs only this one step: give each
