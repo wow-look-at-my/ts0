@@ -73,23 +73,27 @@ however you like). Browser-target and dependency-free projects build with
 
 `wow-look-at-my/ts0@master` is a composite action: it downloads the newest
 `ts0.cjs` from buildhost's master branch (never a pinned version to drift
-behind &mdash; see "Version pinning" above) and runs it, so a workflow doesn't
-have to hand-roll the download.
+behind &mdash; see "Version pinning" above) and runs `ts0 test` then `ts0 build`,
+so a workflow doesn't have to hand-roll the download. It takes no arguments:
 
 ```yaml
 - uses: wow-look-at-my/ts0@master
-  with:
-    args: build
 ```
 
+**There is no input for which command to run**, deliberately. `test`
+type-checks the whole project and bans explicit `any` before running the tests
+(and type-checks even when a project has none yet); `build` type-checks again
+before it emits. Letting the workflow choose the command lets it choose
+`--help` &mdash; exit 0, nothing checked, nothing tested, nothing built, and a
+green check for it.
+
 A project needing several build targets (e.g. a node-target helper script,
-alongside a browser-target bundle) does not need several `uses:` steps: give
-each target its own `ts0.json` and let one `args: build` build all of them (see
+alongside a browser-target bundle) still needs only this one step: give each
+target its own `ts0.json` and the single `build` recurses into all of them (see
 "Nested projects" below).
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `args` | Yes | &mdash; | Arguments passed to `ts0` |
 | `working-directory` | No | `.` | Directory to run `ts0` from |
 | `branch` | No | `master` | Branch to resolve the newest build from |
 | `version` | No | &mdash; | Pin an immutable release (e.g. `v35`); overrides `branch` |
