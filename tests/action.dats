@@ -41,7 +41,7 @@ tests:
 				# action must not have, and it does not get in under another
 				# name: adding ANY input has to be a deliberate edit here.
 				declared="$(awk '/^inputs:/{f=1;next} /^[a-z]/{f=0} f && /^  [a-z-]+:/{gsub(/[ :]/,"");print}' "$action" | sort | tr '\n' ' ')"
-				[ "$declared" = "branch version working-directory " ] || {
+				[ "$declared" = "working-directory " ] || {
 					echo "unexpected action inputs: $declared"
 					exit 1
 				}
