@@ -525,7 +525,7 @@ Three consumption paths:
     the command can choose `--help`, a green check for zero work.
     `tests/action.dats` asserts both commands still run, in that order, that no
     `node` line in the action interpolates an expression, and that the input
-    set is exactly working-directory/branch/version. Keep it that way.
+    set is exactly working-directory. Keep it that way.
 - **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
     Machines with stock Node but no npm/node_modules/git &mdash;
     webhook-runner's `//go:generate` step, CI images, containers &mdash;
