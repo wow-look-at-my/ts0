@@ -95,8 +95,10 @@ target its own `ts0.json` and the single `build` recurses into all of them (see
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `working-directory` | No | `.` | Directory to run `ts0` from |
-| `branch` | No | `master` | Branch to resolve the newest build from |
-| `version` | No | &mdash; | Pin an immutable release (e.g. `v35`); overrides `branch` |
+
+That is the whole input set. The action always downloads the newest ts0 on the
+default branch: ts0 is a build tool, not a pinned dependency, so CI tracks
+latest and there is nothing to choose.
 
 Outputs `path`, the full path to the downloaded `ts0.cjs`.
 
