@@ -1,10 +1,20 @@
+import * as esbuild from "esbuild";
 import { spawn } from "node:child_process";
 import { glob } from "node:fs/promises";
-import { watch as fsWatch } from "node:fs";
+import { rmSync, watch as fsWatch } from "node:fs";
 import { join, extname } from "node:path";
-import { loadConfig } from "../config.ts";
+import { loadConfig, type Ts0Config } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
-import { colors, colorizeErrorBlock, colorizeTestLine, pipeColorized } from "../reporter.ts";
+import { baseEsbuildOptions } from "./esbuild-base.ts";
+import { colors, colorizeErrorBlock, colorizeTestLine, formatEsbuildDiagnostic, pipeColorized } from "../reporter.ts";
+
+// What a compiled test file is called: the source's name with its extension
+// replaced by this. `scan.test.ts` compiles to `scan.test.ts0.mjs`, BESIDE the
+// source rather than under a build directory -- a test that reads a fixture
+// through `import.meta.dirname` must see the directory it was written in. The
+// `.ts0` infix marks the file as ts0's to delete; nothing else in a project
+// carries it.
+const COMPILED_SUFFIX = ".ts0.mjs";
 
 export interface TestOptions {
 	pattern?: string;
@@ -39,9 +49,8 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 
 	const testFiles: string[] = [];
 	// The gate: type-check the whole project (sources AND tests) before running
-	// anything. Node's --experimental-strip-types only erases type annotations,
-	// it does NOT type-check, so without this a test run would execute an
-	// invalid program.
+	// anything. The compile below erases type annotations, it does NOT check
+	// them, so without this a test run would execute an invalid program.
 	const check = await runTypecheck(config, rootDir);
 	if (!check.success) {
 		console.error(colors().red("Type-checking failed:"));
@@ -57,20 +66,127 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 	}
 
 	console.log(`Found ${testFiles.length} test file(s)\n`);
-	const child = spawn("node", ["--experimental-strip-types", "--test", ...testFiles.map((f) => join(rootDir, f))], {
-		stdio: ["inherit", "pipe", "pipe"],
-		cwd: rootDir,
-	});
-	// stdout/stderr are piped rather than inherited so ts0 can recolor
-	// node --test's TAP output (green "ok", red "not ok" + a GitHub Actions
-	// annotation) as it streams -- "inherit" would hand the fd straight to the
-	// terminal, bypassing ts0 entirely.
-	pipeColorized(child.stdout, colorizeTestLine);
-	pipeColorized(child.stderr, colorizeTestLine, process.stderr);
-	return new Promise((resolve, reject) => {
-		child.on("close", (code) => resolve(code ?? 1));
-		child.on("error", reject);
-	});
+
+	const compiled = await compileTests(config, rootDir, testFiles);
+	if (!compiled.success) {
+		console.error(colors().red("Compiling tests failed:"));
+		console.error(colorizeErrorBlock(compiled.errors.join("\n")));
+		return 1;
+	}
+
+	try {
+		// Source maps are inlined in each compiled file, so a stack trace names
+		// the line of TypeScript the reader wrote.
+		const child = spawn("node", ["--enable-source-maps", "--test", ...compiled.files.map((f) => f.compiled)], {
+			stdio: ["inherit", "pipe", "pipe"],
+			cwd: rootDir,
+		});
+		// stdout/stderr are piped rather than inherited so ts0 can recolor
+		// node --test's TAP output (green "ok", red "not ok" + a GitHub Actions
+		// annotation) as it streams -- "inherit" would hand the fd straight to the
+		// terminal, bypassing ts0 entirely. The same pass renames each compiled
+		// file back to its source, so the reader never sees a build artifact.
+		const rename = sourceNameRewriter(compiled.files);
+		pipeColorized(child.stdout, (line) => colorizeTestLine(rename(line)));
+		pipeColorized(child.stderr, (line) => colorizeTestLine(rename(line)), process.stderr);
+		return await new Promise<number>((resolve, reject) => {
+			child.on("close", (code) => resolve(code ?? 1));
+			child.on("error", reject);
+		});
+	} finally {
+		for (const file of compiled.files) rmSync(file.compiled, { force: true });
+	}
+}
+
+interface CompiledTest {
+	source: string;
+	compiled: string;
+}
+
+// compileTests bundles each test file with the same compiler and settings the
+// build uses, and writes the result beside its source as ESM (`.mjs`).
+//
+// ts0 used to hand the .ts sources straight to `node --experimental-strip-types`.
+// Stripping only ERASES type annotations. It cannot turn an `import` statement
+// into a `require` call, and it cannot resolve an extensionless relative
+// specifier the way a bundler does. So a CommonJS-format project -- one whose
+// package.json says `"type": "commonjs"`, which is what a project that ships a
+// cjs bundle usually says -- passed the gate and then died inside node with
+// "Cannot use import statement outside a module". Compiling closes that hole.
+// It also lets a test import whatever the build supports: a `loaders`
+// extension, JSX, an `external` specifier. Stripping could never do that.
+//
+// One bundle per test file matches how `node --test` runs them. Each file gets
+// its own process, so each already had its own copy of the module graph.
+// Package imports stay external and resolve from the project's node_modules at
+// run time: a test is not a shipped artifact, so nothing here must be
+// self-contained.
+//
+// Each file is written next to its source, not into a build directory. A test
+// that reads a fixture relative to `import.meta.dirname` -- or spawns a sibling
+// script, or resolves a path against its own location -- has to see the
+// directory it was written in. Relocating the compiled copy silently moves that
+// anchor and breaks such a test at run time.
+async function compileTests(
+	config: Ts0Config,
+	rootDir: string,
+	testFiles: string[],
+): Promise<{ success: boolean; files: CompiledTest[]; errors: string[] }> {
+	const files = testFiles.map((f) => ({
+		source: join(rootDir, f),
+		compiled: join(rootDir, f.replace(/\.(ts|tsx|mts|cts|jsx)$/i, COMPILED_SUFFIX)),
+	}));
+	// A run killed mid-flight leaves its compiled copies behind. Clear this
+	// run's names before writing them, so a stale file is never executed.
+	for (const file of files) rmSync(file.compiled, { force: true });
+
+	try {
+		const result = await esbuild.build({
+			...baseEsbuildOptions(config),
+			...config.esbuild,
+			// A test runs in node whatever the code targets, and the `.mjs`
+			// extension states its format outright, so the project's
+			// package.json "type" cannot decide it. These settings describe the
+			// test run, which is ts0's to choose, so they sit after the escape
+			// hatch rather than under it.
+			entryPoints: testFiles.map((f) => join(rootDir, f)),
+			platform: "node",
+			format: "esm",
+			packages: "external",
+			minify: false,
+			sourcemap: "inline",
+			outbase: rootDir,
+			outdir: rootDir,
+			// `scan.test.ts` -> `scan.test.ts0.mjs`, in its own directory.
+			entryNames: `[dir]/[name]${COMPILED_SUFFIX.replace(/\.mjs$/, "")}`,
+			outExtension: { ".js": ".mjs" },
+		});
+		return {
+			success: result.errors.length === 0,
+			files,
+			errors: result.errors.map((e) => formatEsbuildDiagnostic(e, "error")),
+		};
+	} catch (err) {
+		const failure = err as esbuild.BuildFailure;
+		return {
+			success: false,
+			files,
+			errors: failure.errors?.map((e) => formatEsbuildDiagnostic(e, "error")) || [String(err)],
+		};
+	}
+}
+
+// sourceNameRewriter replaces a compiled test path with the source file it came
+// from, so node --test names files the reader actually has. The mapping comes
+// from the compile itself, never from a guess at the original extension.
+function sourceNameRewriter(files: CompiledTest[]): (line: string) => string {
+	return (line) => {
+		let out = line;
+		for (const file of files) {
+			if (out.includes(file.compiled)) out = out.split(file.compiled).join(file.source);
+		}
+		return out;
+	};
 }
 
 // testTree runs this project's tests and then those of every ts0 project
@@ -146,6 +262,9 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	const watcher = fsWatch(rootDir, { recursive: true }, (_event, filename) => {
 		if (!filename) return;
 		if (filename.startsWith("dist/") || filename.startsWith("node_modules/")) return;
+		// A cycle writes a compiled copy beside every test file. Waking on those
+		// writes would make each run schedule the next one, forever.
+		if (filename.endsWith(COMPILED_SUFFIX)) return;
 		if (![".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].includes(extname(filename).toLowerCase())) return;
 		trigger();
 	});
