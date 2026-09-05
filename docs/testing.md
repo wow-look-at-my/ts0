@@ -140,6 +140,19 @@ the sandboxed contract.
     `assetPath`, nothing inlined, references rewritten, the external stylesheet
     untouched, real bundles, and a **basename collision** failing the build with
     nothing written.
+- `tests/node-target.dats` -- what a node-target build owes the machine that
+    runs the output. `bundleDependencies: true` compiles an imported package in,
+    proved by moving `node_modules` away before running the artifact; the
+    default leaves the `require("pkg")` call for the installed tree to answer.
+    Then `ts0 test` in each module format: a `"type": "commonjs"` project keeps
+    `__dirname`, `require` and extensionless imports, an ES module project keeps
+    `import.meta.dirname` pointing at its own directory, and
+    `require.main === module` inside a module under test FIRES, because one
+    bundle is one module -- pinned here so it is learned from a test rather than
+    from a mystifying CI failure.
+- `tests/action.dats` -- `action.yml` runs `test` then `build`, in that order,
+    with no command input for a caller to point at `--help`; no `node` line
+    interpolates an expression; the input set is exactly `working-directory`.
 
 CI still builds the two HTML samples into the workspace after the suites, but
 that step is not a test -- it only produces the downloadable artifacts.
