@@ -27,6 +27,19 @@ How the pieces fit:
     regular `dependencies` entry (not `devDependencies`) precisely because
     every consumption path, including a plain `npm install`, needs it
     resolvable from ts0's own installed tree.
+- **So do the packages `@types/node` imports from**, walked by
+    `embedTypeDependencies` in `scripts/build-prebuilt.ts` rather than listed,
+    so a dependency added on a version bump comes along and one that cannot be
+    resolved fails the packaging. Today that closure is `undici-types`, and it
+    is where `fetch` returns its `Response`. Embedding `@types/node` alone left
+    a `Response` with no members: `(await fetch(url)).ok` failed with
+    "Property 'ok' does not exist on type 'Response'" in a project whose only
+    fault was trusting the types ts0 supplies. tsc reports the members rather
+    than the missing package, because an unresolved type import degrades to a
+    shapeless type instead of an error -- which is why the guard lives in the
+    packaging, and why `scripts/prebuilt-smoke.sh` builds a program that calls
+    `fetch`. From source there is nothing to catch: `undici-types` sits beside
+    `@types/node` in ts0's own `node_modules`.
 - **The compiler is embedded ONCE.** The npm package ships it twice --
     `lib/typescript.js` (the API) and `lib/_tsc.js` (the same compiler
     rebuilt as a CLI, reached through `bin/tsc` &rarr; `lib/tsc.js`) -- and

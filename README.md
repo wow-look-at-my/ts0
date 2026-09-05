@@ -195,6 +195,7 @@ auto-detects an entry point from `src/main.ts`, `src/index.ts`, `main.ts`, `inde
 | `declarations` | `boolean`          | `true`             | js (library) target only: emit a parallel `*.d.ts` tree into `outdir` alongside the compiled `*.js` (see [Type declarations](#type-declarations)). Set `false` to skip. Ignored by the single-entry and HTML targets. |
 | `external`  | `string[]`            | &mdash;            | Import specifiers that stay **external references** in the output instead of being bundled, e.g. `["*.css"]` or `["lit"]`. The import statement is emitted verbatim and the file's contents appear nowhere in the output (see [External imports](#external-imports)). Applies to the default and js targets. |
 | `bundleShared` | `boolean`          | `true`             | js (library) target: may code shared by two or more outputs be factored into a shared chunk they import. Set `false` to make every emitted module fully self-contained (shared code is duplicated into each). |
+| `bundleDependencies` | `boolean`    | `false`            | Node target: compile imported packages INTO the output instead of leaving them `require("pkg")` calls for Node to resolve at run time. Set `true` when the output has to run where its `node_modules` does not exist &mdash; a GitHub Action, a script copied onto a machine on its own. A specifier listed in `external` stays a reference even so. Browser code always bundles and ignores this. |
 | `esbuild`   | `object`              | &mdash;            | Raw escape hatch &mdash; merged into the esbuild options last (overrides `loaders`) |
 
 When `outfile` is set with a Node target, `ts0` produces a single executable file
@@ -516,10 +517,23 @@ classic `React.createElement`, which throws `React is not defined` in a Preact b
     sources directly via `node --experimental-strip-types` &mdash; the fast dev
     loop, minus the artifact, but never minus the type-check.
 - **Test:** `ts0 test` type-checks the whole project, then (only if it passes)
-    runs the discovered test files via `node --test --experimental-strip-types`. A
-    type error anywhere fails the command and no tests run. `ts0 test --watch`
-    re-type-checks and re-runs on every change (ts0 drives the watch loop itself
-    rather than `node --test --watch`, so the check is never skipped).
+    compiles each discovered test file with the same compiler the build uses and
+    runs the results with `node --test`. A type error anywhere fails the command
+    and no tests run. `ts0 test --watch` re-type-checks and re-runs on every
+    change (ts0 drives the watch loop itself rather than `node --test --watch`,
+    so the check is never skipped).
+
+    Compiling rather than stripping is what lets a test import whatever the
+    build supports &mdash; a `loaders` extension, JSX, an `external` specifier
+    &mdash; and what lets a CommonJS-format project run at all: stripping erases
+    type annotations without turning `import` into `require`, so such a project
+    used to pass the gate and then die inside Node on "Cannot use import
+    statement outside a module". Each compiled file keeps its source's module
+    format and is written beside it (deleted after the run), so `__dirname`,
+    `require` and `import.meta.dirname` all mean what they meant. The one thing
+    that cannot survive is `require.main === module` in a module under test:
+    everything in a bundle shares one module object, so that guard fires. Export
+    the work and leave the invocation to the entry file.
 - **Nested projects:** a subdirectory with its own `ts0.json` is its own
     project, and `ts0 build` / `ts0 test` recurse into every one of them, each
     under its own config &mdash; to any depth. Nothing is skipped: a broken

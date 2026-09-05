@@ -48,6 +48,7 @@ tests/                  # dats behavioural suites (all of CI's assertions)
     gate.dats           # type-check gate + explicit-`any` ban, every path
     samples.dats        # every sample under samples/
     html-referenced.dats # the multi-file HTML target
+    node-target.dats    # bundleDependencies, and running a test in its own module format
     action.dats         # action.yml: always test then build, no command input
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
@@ -150,10 +151,10 @@ single chokepoint, called from every command that emits or executes code:
     does **not** type-check, so without this gate `ts0 run --no-build` would
     execute broken code. `--no-build` therefore skips only the bundle/artifact,
     never the check.
-- `test()` runs it before spawning `node --test`. The test runner uses
-    `--experimental-strip-types` too, so an un-checked test run would execute an
-    invalid program. A type error anywhere in the project fails `ts0 test` and no
-    test process is spawned.
+- `test()` runs it before compiling and spawning anything. The compile erases
+    type annotations without checking them, so an un-checked test run would
+    execute an invalid program. A type error anywhere in the project fails
+    `ts0 test` and no test process is spawned.
 
 The gate is more than `tsc`: it also bans explicit `any` (see "Explicit `any`
 is banned" below), so everything said here about unskippability covers that
@@ -228,7 +229,34 @@ up-front check would let later rebuilds/re-runs slip past:
     change without re-type-checking, which would run an invalid program). Instead
     `test()` owns the loop: an `fsWatch` debounces changes into a `cycle()` that
     type-checks, then runs the tests one-shot only if the check passes. Do not
-    switch it back to `node --test --watch`.
+    switch it back to `node --test --watch`. The watcher ignores the compiled
+    test copies a cycle writes, or each run would schedule the next one.
+
+### `ts0 test` compiles each test file; it does not strip it
+
+`compileTests` in `commands/test.ts` bundles every discovered test file with
+`baseEsbuildOptions` &mdash; the same settings the build uses &mdash; and
+`node --test` runs the results. Three properties are load-bearing:
+
+- **The format is the source's own**, from the nearest package.json (`.mts`/
+    `.cts` outranking it), in an extension that states it (`.ts0.cjs` /
+    `.ts0.mjs`). `--experimental-strip-types` only erases annotations: it cannot
+    turn `import` into `require`, so a `"type": "commonjs"` project passed the
+    gate and died inside node on "Cannot use import statement outside a module".
+    Compiling one format into the other is just as wrong &mdash; it drops
+    `__dirname`/`require`/`require.main`, or `import.meta`, and the test fails on
+    a global that was there a moment ago. esbuild takes one format per call, so
+    files are grouped by format.
+- **The copy is written BESIDE its source**, never under a build directory: a
+    test that reads a fixture through `import.meta.dirname` or `__dirname` has to
+    see the directory it was written in. It is deleted in a `finally`, and
+    `node --test` output is rewritten to name the source (`sourceNameRewriter`,
+    from the mapping the compile produced).
+- **`require.main === module` in a module under test always fires**, because
+    every module in one bundle shares one module object. Nothing can fix that
+    here; a module under test exports its work and leaves the invocation to the
+    entry file. `tests/node-target.dats` pins this so it is learned from a test
+    rather than from a mystifying CI failure.
 
 Module resolution in the generated tsconfig follows who consumes the code: a
 **Node-target single-entry** app &mdash; the one case where the output is
@@ -443,6 +471,20 @@ target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
 single entry to run). The non-output esbuild options (platform, format, jsx, …)
 come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
 default target so the two can't drift.
+
+## Dependency bundling (`bundleDependencies`)
+
+A node-target build leaves an imported package a `require("pkg")` call
+(esbuild's `packages: "external"`), which is right for a CLI installed
+alongside its node_modules. `"bundleDependencies": true` compiles those
+packages in instead, for an artifact that must run where its node_modules does
+not exist &mdash; a GitHub Action, whose release tag ships `dist/` and nothing
+else. Threaded through `baseEsbuildOptions`, so `external` still wins per
+specifier: that is how a native addon or a peer dependency opts back out.
+
+The default stays external. ts0 builds ITSELF with the node target and resolves
+`typescript` at run time through `createRequire`; bundling its dependencies
+would break that and try to compile esbuild's native module in.
 
 ## External imports (`external`)
 
