@@ -68,16 +68,15 @@ jobs:
       # stages its project into its own directory and asserts what the build
       # wrote, so a failure names the file and the pattern.
       #
-      # The repo root, not tests/: dats walks a directory for every *.dats file
-      # under it, so a suite that moves is still found and this step never goes
-      # out of sync. Real (bubblewrap) sandboxing, not --no-sandbox: the
+      # The action requires the directory holding the suites, and finds the
+      # *.dats files in it. Real (bubblewrap) sandboxing, not --no-sandbox: the
       # wow-look-at-my/dats@master action makes sure bwrap actually works on
       # this runner first.
       - name: Behaviour suites (dats)
         uses: wow-look-at-my/dats@master
         with:
           args: test
-          tests: .
+          tests: tests/
 
       # Not a test -- the assertions are in tests/samples.dats. This builds
       # the two HTML samples into the workspace purely so the artifacts
