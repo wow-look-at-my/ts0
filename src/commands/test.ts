@@ -1,20 +1,22 @@
 import * as esbuild from "esbuild";
 import { spawn } from "node:child_process";
 import { glob } from "node:fs/promises";
-import { rmSync, watch as fsWatch } from "node:fs";
-import { join, extname } from "node:path";
+import { existsSync, readFileSync, rmSync, watch as fsWatch } from "node:fs";
+import { dirname, join, extname } from "node:path";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 import { colors, colorizeErrorBlock, colorizeTestLine, formatEsbuildDiagnostic, pipeColorized } from "../reporter.ts";
 
-// What a compiled test file is called: the source's name with its extension
-// replaced by this. `scan.test.ts` compiles to `scan.test.ts0.mjs`, BESIDE the
-// source rather than under a build directory -- a test that reads a fixture
-// through `import.meta.dirname` must see the directory it was written in. The
-// `.ts0` infix marks the file as ts0's to delete; nothing else in a project
-// carries it.
-const COMPILED_SUFFIX = ".ts0.mjs";
+// What a compiled test file is called: the source's name, with its extension
+// replaced by this infix plus `.cjs` or `.mjs`. `scan.test.ts` compiles to
+// `scan.test.ts0.cjs` or `scan.test.ts0.mjs`, BESIDE the source rather than
+// under a build directory -- a test that reads a fixture through
+// `import.meta.dirname` or `__dirname` must see the directory it was written
+// in. The `.ts0` infix marks the file as ts0's to delete; nothing else in a
+// project carries it.
+const COMPILED_INFIX = ".ts0";
+const COMPILED_EXTS = [".cjs", ".mjs"];
 
 export interface TestOptions {
 	pattern?: string;
@@ -101,6 +103,7 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 interface CompiledTest {
 	source: string;
 	compiled: string;
+	format: "cjs" | "esm";
 }
 
 // compileTests bundles each test file with the same compiler and settings the
@@ -127,53 +130,104 @@ interface CompiledTest {
 // script, or resolves a path against its own location -- has to see the
 // directory it was written in. Relocating the compiled copy silently moves that
 // anchor and breaks such a test at run time.
+//
+// Each file also keeps the module format its own source has, in an extension
+// that states that format outright. A CommonJS file may say `__dirname`,
+// `require` and `require.main === module`; an ES module file may say
+// `import.meta`. Compiling either one into the other format drops the globals
+// the source was written against, and the test dies on a name that was there a
+// moment ago.
 async function compileTests(
 	config: Ts0Config,
 	rootDir: string,
 	testFiles: string[],
 ): Promise<{ success: boolean; files: CompiledTest[]; errors: string[] }> {
-	const files = testFiles.map((f) => ({
-		source: join(rootDir, f),
-		compiled: join(rootDir, f.replace(/\.(ts|tsx|mts|cts|jsx)$/i, COMPILED_SUFFIX)),
-	}));
+	const projectFormat = moduleFormat(rootDir);
+	const files = testFiles.map((f) => {
+		const format = fileModuleFormat(f, projectFormat);
+		return {
+			source: join(rootDir, f),
+			compiled: join(rootDir, f.replace(/\.(ts|tsx|mts|cts|jsx)$/i, `${COMPILED_INFIX}.${format === "cjs" ? "cjs" : "mjs"}`)),
+			format,
+		};
+	});
 	// A run killed mid-flight leaves its compiled copies behind. Clear this
 	// run's names before writing them, so a stale file is never executed.
 	for (const file of files) rmSync(file.compiled, { force: true });
 
+	const errors: string[] = [];
+	for (const format of ["cjs", "esm"] as const) {
+		const group = files.filter((f) => f.format === format);
+		if (group.length === 0) continue;
+		errors.push(...(await compileGroup(config, rootDir, group, format)));
+	}
+	return { success: errors.length === 0, files, errors };
+}
+
+// compileGroup compiles the test files that share one module format. esbuild
+// takes a single format per call, so one call per format is what mixed sources
+// need -- an .mts test beside a .cts one, or either beside the project default.
+async function compileGroup(
+	config: Ts0Config,
+	rootDir: string,
+	group: CompiledTest[],
+	format: "cjs" | "esm",
+): Promise<string[]> {
 	try {
 		const result = await esbuild.build({
 			...baseEsbuildOptions(config),
 			...config.esbuild,
-			// A test runs in node whatever the code targets, and the `.mjs`
-			// extension states its format outright, so the project's
-			// package.json "type" cannot decide it. These settings describe the
-			// test run, which is ts0's to choose, so they sit after the escape
-			// hatch rather than under it.
-			entryPoints: testFiles.map((f) => join(rootDir, f)),
+			// A test runs in node whatever the code targets. These settings
+			// describe the test run, which is ts0's to choose, so they sit after
+			// the escape hatch rather than under it.
+			entryPoints: group.map((f) => f.source),
 			platform: "node",
-			format: "esm",
+			format,
 			packages: "external",
 			minify: false,
 			sourcemap: "inline",
 			outbase: rootDir,
 			outdir: rootDir,
-			// `scan.test.ts` -> `scan.test.ts0.mjs`, in its own directory.
-			entryNames: `[dir]/[name]${COMPILED_SUFFIX.replace(/\.mjs$/, "")}`,
-			outExtension: { ".js": ".mjs" },
+			// `scan.test.ts` -> `scan.test.ts0.cjs`, in its own directory.
+			entryNames: `[dir]/[name]${COMPILED_INFIX}`,
+			outExtension: { ".js": format === "cjs" ? ".cjs" : ".mjs" },
 		});
-		return {
-			success: result.errors.length === 0,
-			files,
-			errors: result.errors.map((e) => formatEsbuildDiagnostic(e, "error")),
-		};
+		return result.errors.map((e) => formatEsbuildDiagnostic(e, "error"));
 	} catch (err) {
 		const failure = err as esbuild.BuildFailure;
-		return {
-			success: false,
-			files,
-			errors: failure.errors?.map((e) => formatEsbuildDiagnostic(e, "error")) || [String(err)],
-		};
+		return failure.errors?.map((e) => formatEsbuildDiagnostic(e, "error")) || [String(err)];
 	}
+}
+
+// moduleFormat reports the module format Node gives a `.js` or `.ts` file in
+// this directory: the `type` of the nearest package.json above it, defaulting
+// to CommonJS exactly as Node does when no package.json declares one.
+function moduleFormat(startDir: string): "cjs" | "esm" {
+	let dir = startDir;
+	while (dir !== dirname(dir)) {
+		const manifest = join(dir, "package.json");
+		if (existsSync(manifest)) {
+			try {
+				const parsed: unknown = JSON.parse(readFileSync(manifest, "utf-8"));
+				const type = (parsed as { type?: unknown }).type;
+				return type === "module" ? "esm" : "cjs";
+			} catch {
+				// An unreadable package.json says nothing about the format. Node
+				// keeps walking up on one, so keep walking too.
+			}
+		}
+		dir = dirname(dir);
+	}
+	return "cjs";
+}
+
+// fileModuleFormat reports the format of one test file. A `.mts`/`.cts`
+// extension declares the format by itself and outranks the package; every other
+// extension takes the project's.
+function fileModuleFormat(relPath: string, projectFormat: "cjs" | "esm"): "cjs" | "esm" {
+	if (/\.mts$/i.test(relPath)) return "esm";
+	if (/\.cts$/i.test(relPath)) return "cjs";
+	return projectFormat;
 }
 
 // sourceNameRewriter replaces a compiled test path with the source file it came
@@ -264,7 +318,7 @@ export async function test(options: TestOptions = {}): Promise<void> {
 		if (filename.startsWith("dist/") || filename.startsWith("node_modules/")) return;
 		// A cycle writes a compiled copy beside every test file. Waking on those
 		// writes would make each run schedule the next one, forever.
-		if (filename.endsWith(COMPILED_SUFFIX)) return;
+		if (COMPILED_EXTS.some((ext) => filename.endsWith(`${COMPILED_INFIX}${ext}`))) return;
 		if (![".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].includes(extname(filename).toLowerCase())) return;
 		trigger();
 	});
