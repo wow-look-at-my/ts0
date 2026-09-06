@@ -30,10 +30,7 @@ jobs:
 
   test:
     needs: build
-    # bwrap cannot get an unprivileged user namespace on the plain wow-linux
-    # pool at all (the runner's own container lacks the capability, confirmed
-    # live -- not a fixable kernel sysctl), so the dats step below falls back
-    # to its docker backend; that needs a runner with a docker daemon.
+    # bwrap gets no user namespace on the plain pool, so dats falls back to docker.
     runs-on: ${{ vars.CI_RUNNER_DIND || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -54,33 +51,13 @@ jobs:
       - name: Link ts0 globally
         run: npm link
 
-      # go-toolchain bundles dats and runs .dats suites itself, but it
-      # hard-requires a go.mod and this repo is TypeScript, so the binary is
-      # fetched directly -- a public buildhost download needing no auth.
-      #
-      # Every behavioural assertion about the CLI lives in tests/*.dats:
-      # tests/cli.dats (init/build/run/test, --config), tests/gate.dats (the
-      # type-check gate and the explicit-any ban on every path),
-      # tests/samples.dats (every sample under samples/),
-      # tests/html-referenced.dats (the multi-file HTML target), and
-      # tests/node-target.dats (dependency bundling, and running a test in the
-      # module format its source has). Each test
-      # stages its project into its own directory and asserts what the build
-      # wrote, so a failure names the file and the pattern.
-      #
-      # The action requires the directory holding the suites, and finds the
-      # *.dats files in it. Real (bubblewrap) sandboxing, not --no-sandbox: the
-      # wow-look-at-my/dats@master action makes sure bwrap actually works on
-      # this runner first.
+      # Every behavioural assertion about the CLI lives here; docs/testing.md says what each covers.
       - name: Behaviour suites (dats)
         uses: wow-look-at-my/dats@master
         with:
-          args: test
           tests: tests/
 
-      # Not a test -- the assertions are in tests/samples.dats. This builds
-      # the two HTML samples into the workspace purely so the artifacts
-      # below exist for a human to download and open in a browser.
+      # Not a test (tests/samples.dats asserts these): it makes the artifacts below downloadable.
       - name: Build html samples for the artifacts below
         run: |
           ts0 build --config samples/html/ts0.json
@@ -100,16 +77,7 @@ jobs:
           name: html-jsx-sample
           path: samples/html-jsx/dist/index.html
 
-  # ---------------------------------------------------------------------------
-  # Prebuilt ts0.cjs for buildhost: ONE platform-neutral CommonJS file (the
-  # CLI + esbuild JS API + the TypeScript compiler inlined) that runs on
-  # stock Node >= 22 with no npm, plus the five platform-native esbuild
-  # binaries it fetches on first run. Consumers:
-  #   curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
-  #   node ts0.cjs build            # or: curl -fsSL "...?..." | node - build
-  # scripts/build-prebuilt.ts documents the packaging; prebuilt-smoke.sh is
-  # the bare-node (no npm on PATH) verification.
-
+  # Packages ts0 for buildhost; the contract is docs/prebuilt-ts0-cjs.md.
   prebuilt:
     needs: build
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -136,11 +104,7 @@ jobs:
           path: build-prebuilt/out/
           if-no-files-found: error
 
-  # Repeats the bare-node smoke on real arm64, exercising the linux/arm64
-  # esbuild native end-to-end. The darwin/windows natives ship without a CI
-  # execution job on purpose: they are upstream esbuild release binaries
-  # (registry tarballs verified against the package-lock sha512), and
-  # ts0.cjs itself is platform-neutral and fully smoked here.
+  # Repeats the smoke on real arm64, so the linux/arm64 esbuild native runs end to end.
   smoke-prebuilt-linux-arm64:
     needs: prebuilt
     runs-on: ubuntu-24.04-arm
@@ -152,8 +116,7 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      # The samples' type-check resolves @types/node and preact from the
-      # repo's node_modules -- project dependencies, not toolchain pieces.
+      # The samples resolve @types/node and preact here: project deps, not toolchain.
       - run: npm ci
 
       - uses: actions/download-artifact@v4
@@ -164,26 +127,7 @@ jobs:
       - name: Bare-node smoke (linux/arm64)
         run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
 
-  # The single publish path: master only, gated on both smokes, and driven
-  # entirely by the org's ready-made buildhost-publish action -- it
-  # self-serves this run's `prebuilt` artifact (hence actions: read),
-  # authenticates with a GHA OIDC token (hence id-token: write; buildhost
-  # trusts the issuer and auto-provisions projects, public because this repo
-  # is public), and maps files by its <binary>_<os>_<arch>[.exe] naming
-  # convention:
-  #   ts0_cosmo_any                      -> project ts0, ONE artifact under
-  #                                         the cosmo/any multi-platform
-  #                                         alias (one stored body, resolvable
-  #                                         under every ?os=..&arch=.. pair)
-  #   esbuild-<version>_<os>_<arch>      -> project ts0/esbuild-<version>,
-  #                                         the five natives ts0.cjs fetches
-  #                                         on first run
-  # Every payload is ~10 MB, far below the direct-upload cap. Every branch
-  # publishes: buildhost treats git branch as a first-class field, and the apex
-  # "latest" only ever resolves the default branch, so a branch release cannot
-  # hijack what stable consumers download. Gating this job on master instead
-  # meant the publish path -- the only part of CI that talks to buildhost -- was
-  # skipped on every PR, so a change to it passed CI without being run once.
+  # Every branch publishes; "latest" still only ever resolves the default branch.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}

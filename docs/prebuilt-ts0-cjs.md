@@ -2,7 +2,7 @@
 
 `scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral
 CommonJS file plus five small platform-native esbuild binaries. CI publishes
-them to buildhost on merges to master; consumers run
+them to buildhost on every branch push; consumers run
 `node ts0.cjs <cmd>` (or `curl ... | node - <cmd>`) on stock Node >= 22 with
 no npm. Node is the deliberate prerequisite &mdash; ts0 is a Node tool, and
 hosting duplicated Node runtimes per platform was rejected as waste.
@@ -114,7 +114,7 @@ How the pieces fit:
     the esbuild version is read from the lockfile and baked
     into both the native-fetch URL and the buildhost project name
     (`ts0/esbuild-<version>`), so an esbuild bump automatically publishes a
-    new natives project on the next master merge.
+    new natives project on the next push.
 - **CI/publish** (`.github/workflows/ci.yml`): the `prebuilt` job builds
     everything and runs `scripts/prebuilt-smoke.sh` &mdash; a bare-node smoke
     (`env -i`, PATH holds ONLY node; npm/npx asserted unreachable) that
@@ -128,7 +128,7 @@ How the pieces fit:
     repeats it on `ubuntu-24.04-arm` (exercising the arm64 native).
     macOS/windows natives ship without a CI execution job on purpose: they
     are upstream esbuild release binaries, lock-verified, and ts0.cjs itself
-    is platform-neutral. The `publish` job (master only) is the STOCK
+    is platform-neutral. The `publish` job is the STOCK
     `wow-look-at-my/buildhost/.github/actions/buildhost-publish@master`
     action with `artifact_name: prebuilt` &mdash; no inline publish
     scripting; if the action ever lacks something, fix it upstream in the
@@ -141,12 +141,16 @@ How the pieces fit:
     `ts0_cosmo_any` &rarr; project `ts0`, one artifact under the cosmo/any
     multi-platform alias (one stored body, resolvable under every
     `?os=..&arch=..` pair); `esbuild-<version>_<os>_<arch>[.exe]` &rarr;
-    project `ts0/esbuild-<version>`. Each master merge creates a new release
+    project `ts0/esbuild-<version>`. Each push creates a new release
     of BOTH projects (the natives' bytes are identical across re-publishes
     of the same esbuild version, and ts0.cjs's version-less fetch URL always
     resolves the latest); `scripts/build-prebuilt.ts` owns the naming, so a
-    rename there is a publish-layout change. PR branches build and smoke but
-    never publish.
+    rename there is a publish-layout change. EVERY branch publishes: buildhost
+    treats the git branch as a first-class field and the apex "latest" only
+    ever resolves the default branch, so a branch release cannot hijack what
+    stable consumers download. Gating the job on master instead left the only
+    part of CI that talks to buildhost skipped on every PR, so a change to it
+    passed CI without being run once.
 - **Org merge gate / job naming**: merging into master needs a green
     `all-builds` commit status on the PR head SHA, posted automatically by
     an org app (required-builds-manager) that aggregates every build on the

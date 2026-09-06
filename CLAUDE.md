@@ -590,7 +590,7 @@ Three consumption paths:
 
 `scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral
 CommonJS file plus five small platform-native esbuild binaries; CI publishes them
-on merges to master, and consumers run `node ts0.cjs <cmd>` on stock Node >= 22
+on every branch push, and consumers run `node ts0.cjs <cmd>` on stock Node >= 22
 with no npm. CommonJS, `.cjs`, and stdin-runnable are all load-bearing; the
 compiler is embedded exactly once; and nothing in shared code may depend on the
 bundle's own path.

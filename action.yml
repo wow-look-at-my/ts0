@@ -1,12 +1,7 @@
 name: Run ts0
 description: Type-check, test and build a ts0 project, without a caller having to hand-roll the download
 
-# There is deliberately no input for WHAT to run. ts0 in CI means one thing:
-# type-check, test, build -- in that order, every time. A command input makes
-# the workflow author the one who decides what "ts0 ran" means, and a command
-# can be `--help`: exit 0, nothing checked, nothing tested, nothing built, and
-# a green check for it. A caller with a genuinely different target gives it its
-# own ts0.json -- `build` recurses into every nested project.
+# No input for WHAT to run: a caller that can choose the command can choose `--help`.
 inputs:
   working-directory:
     description: 'Directory to run ts0 from'
@@ -21,19 +16,14 @@ outputs:
 runs:
   using: composite
   steps:
-    # Every optional input is omitted on purpose. os/arch default to the
-    # runner's own platform, and no version or branch means the newest release
-    # on ts0's default branch. ts0 is a build TOOL, not a pinned dependency:
-    # CI tracks latest, and there is nothing here for a caller to choose.
+    # Optional inputs omitted on purpose: ts0 is a build tool, so CI tracks latest.
     - name: Download ts0
       id: download
       uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
       with:
         project: ts0
 
-    # `test` type-checks the whole project (and bans explicit `any`) before it
-    # discovers a single test file, so this is the gate even in a project with
-    # no tests yet -- there it type-checks and reports none found.
+    # `test` type-checks before it discovers a file, so this gates a project with no tests.
     - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
