@@ -304,7 +304,54 @@ tests:
 			- "TS2322"
 			- "recursion OK: the nested project was entered and refused"
 
-	- desc: "a clean nested project is built and tested by the parent"
+	# Each project must find the one test file IT owns. The other way to get
+	# this wrong is to glob the nested tests into the parent's own run, which
+	# EXECUTES a program the parent's gate never checked, under settings it was
+	# not written for. Counting the discovery lines is what tells the two apart:
+	# a green run says nothing about which project ran what.
+	- desc: "a clean nested project is built and tested by the parent, each finding its own tests"
+	  cmd: bash {inputs.run.sh} {outputs.build.log}
+	  inputs:
+		files:
+			ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			src/main.ts: |
+				export const ok: number = 1;
+			src/main.test.ts: |
+				export const parentRan = 1;
+			nested/ts0.json: |
+				{ "entry": "src/main.ts", "outdir": "dist", "target": "node" }
+			nested/src/main.ts: |
+				export const ok: number = 1;
+			nested/src/main.test.ts: |
+				export const nestedRan = 1;
+			run.sh: |
+				set -euo pipefail
+				. {shared.stage.sh}
+				stage "$1" "$(dirname {inputs.ts0.json})"
+				rm -rf dist nested/dist
+				ts0 build 2>&1 | tee "$1"
+				ts0 test 2>&1 | tee -a "$1"
+
+				grep -q "^nested:$" "$1" || { echo "FAIL: the nested project was never entered" | tee -a "$1"; exit 1; }
+				found=$(grep -c "Found 1 test file" "$1" || true)
+				if [ "$found" -ne 2 ]; then
+					echo "FAIL: expected one test run per project, saw $found" | tee -a "$1"
+					exit 1
+				fi
+				echo "recursion OK: both projects built" | tee -a "$1"
+	  outputs:
+		stdout:
+			- "recursion OK: both projects built"
+		files:
+			dist/main.js:
+			nested/dist/main.js:
+
+	# `ts0 run` is the one command that does NOT recurse, and only because it
+	# executes a single entry. Building a nested project it will never run is
+	# work nobody asked for, and it writes output into a tree the caller did not
+	# name.
+	- desc: "ts0 run builds only its own project, not nested ones"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
 	  inputs:
 		files:
@@ -321,12 +368,16 @@ tests:
 				. {shared.stage.sh}
 				stage "$1" "$(dirname {inputs.ts0.json})"
 				rm -rf dist nested/dist
-				ts0 build 2>&1 | tee "$1"
-				ts0 test 2>&1 | tee -a "$1"
-				echo "recursion OK: both projects built" | tee -a "$1"
+				ts0 run 2>&1 | tee "$1"
+				if [ -e nested/dist ]; then
+					echo "FAIL: run built a nested project it will not execute" | tee -a "$1"
+					exit 1
+				fi
+				echo "run OK: only this project was built" | tee -a "$1"
 	  outputs:
 		stdout:
-			- "recursion OK: both projects built"
+			- "run OK: only this project was built"
 		files:
 			dist/main.js:
+		"!files":
 			nested/dist/main.js:
