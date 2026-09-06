@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +32,7 @@ jobs:
   test:
     needs: build
     # bwrap gets no user namespace on the plain pool, so dats falls back to docker.
-    runs-on: ${{ vars.CI_RUNNER_DIND || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +81,7 @@ jobs:
   # Packages ts0 for buildhost; the contract is docs/prebuilt-ts0-cjs.md.
   prebuilt:
     needs: build
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +131,7 @@ jobs:
   # Every branch publishes; "latest" still only ever resolves the default branch.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read

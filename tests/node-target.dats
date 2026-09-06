@@ -107,6 +107,11 @@ tests:
 			# whole file died on "Cannot use import statement outside a module".
 			# __dirname, require and require.main are the globals this format
 			# has, and a compile into ESM would take all three away.
+			# require.main === module FIRES inside a module under test, because
+			# ts0 compiles one test file into one bundle and one bundle is one
+			# module. A `if (require.main === module)` block that a reader
+			# expects to stay dormant therefore runs. Pinned here so it is
+			# learned from a test rather than from a mystifying CI failure.
 			run.sh: |
 				set -euo pipefail
 				mkdir -p "$(dirname "$1")/proj"

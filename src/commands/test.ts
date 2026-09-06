@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { glob } from "node:fs/promises";
 import { existsSync, readFileSync, rmSync, watch as fsWatch } from "node:fs";
 import { dirname, join, extname } from "node:path";
+import { availableParallelism } from "node:os";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
@@ -17,6 +18,19 @@ import { colors, colorizeErrorBlock, colorizeTestLine, formatEsbuildDiagnostic, 
 // project carries it.
 const COMPILED_INFIX = ".ts0";
 const COMPILED_EXTS = [".cjs", ".mjs"];
+
+// How many test files run at once. node defaults this to
+// `availableParallelism() - 1`, which is 1 on a two-core CI runner: every file
+// then runs strictly after the one before it, and a suite of five heavy files
+// takes the sum of all five. The floor of 4 is what a test file here actually
+// waits on -- a spawned compiler, a child process, a file system -- so more of
+// them in flight than there are cores still finishes sooner. TS0_TEST_CONCURRENCY
+// overrides it.
+function testConcurrency(): number {
+	const override = Number(process.env.TS0_TEST_CONCURRENCY);
+	if (Number.isInteger(override) && override > 0) return override;
+	return Math.max(4, availableParallelism());
+}
 
 export interface TestOptions {
 	pattern?: string;
@@ -79,10 +93,19 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 	try {
 		// Source maps are inlined in each compiled file, so a stack trace names
 		// the line of TypeScript the reader wrote.
-		const child = spawn("node", ["--enable-source-maps", "--test", ...compiled.files.map((f) => f.compiled)], {
-			stdio: ["inherit", "pipe", "pipe"],
-			cwd: rootDir,
-		});
+		const child = spawn(
+			"node",
+			[
+				"--enable-source-maps",
+				`--test-concurrency=${testConcurrency()}`,
+				"--test",
+				...compiled.files.map((f) => f.compiled),
+			],
+			{
+				stdio: ["inherit", "pipe", "pipe"],
+				cwd: rootDir,
+			},
+		);
 		// stdout/stderr are piped rather than inherited so ts0 can recolor
 		// node --test's TAP output (green "ok", red "not ok" + a GitHub Actions
 		// annotation) as it streams -- "inherit" would hand the fd straight to the
