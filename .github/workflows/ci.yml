@@ -57,8 +57,7 @@ jobs:
         with:
           tests: tests/
 
-      # Not a test (tests/samples.dats asserts these): it builds the pages the
-      # publish job serves, so a human can open a sample build in a browser.
+      # Not a test (tests/samples.dats asserts these): it builds the pages the publish job serves.
       - name: Build html samples for the sample site
         run: |
           ts0 build --config samples/html/ts0.json
@@ -155,8 +154,7 @@ jobs:
           name: html-samples
           path: sample-site
 
-      # buildhost serves a site under one path segment, so a branch name with a
-      # slash in it needs flattening first.
+      # buildhost serves a site under one path segment, so a slash in the branch name has to go.
       - name: Site branch name
         id: sitebranch
         uses: wow-look-at-my/actions@typescript#latest
