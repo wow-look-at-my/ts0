@@ -1,65 +1,18 @@
 # Output: GitHub Actions annotations + ANSI coloring
 
-`src/reporter.ts` is the one place ts0 decides how to show a diagnostic --
-never duplicated per command. It backs three independent things:
+`src/reporter.ts` is the one place ts0 decides how to show a diagnostic -- never duplicated per command. It backs three independent things:
 
-1. **`::error::`/`::warning::` GitHub Actions annotations.** `annotate()` is a
-   no-op unless `GITHUB_ACTIONS=true` (`isGithubActions()`); the workflow
-   command syntax would otherwise print as literal `::error::...` noise in a
-   local terminal. `formatAnnotation` implements GitHub's escaping rules for
-   the message (`%`/CR/LF) and for property values (those plus `:`/`,`).
-2. **Color support detection.** `colorEnabled()` forces color ON under GitHub
-   Actions even though its stdout is a pipe, not a TTY -- the Actions log
-   viewer renders ANSI same as a real terminal, so a bare `stream.isTTY` check
-   would leave every CI run uncolored. Outside Actions it follows the stream's
-   own TTY-ness. `NO_COLOR` and `FORCE_COLOR` (the usual community env vars)
-   take precedence over both.
-3. **Recoloring known output shapes**, via `colors()` (raw ANSI wrappers) and
-   two higher-level functions built on it:
-   - `colorizeErrorBlock(text, fallbackSeverity)` -- for a block of ts0's own
-     error/warning text (a `BuildResult.errors`/`.warnings` entry, or
-     `runTypecheck()`'s `.output`). It parses each line against the tsc/ts0
-     diagnostic shape `file(line,col): error TSxxxx: message` (also produced
-     by `formatDiagnostic`/`formatEsbuildDiagnostic` for esbuild's own
-     messages, so every target -- default, js, HTML -- reports the same
-     shape). A line matching it gets its location dimmed and its
-     `error`/`warning` marker brightened, in that line's own severity color,
-     and is reported as a GitHub annotation with the parsed file/line/col. Any
-     other non-blank line (a header like "Build failed:", a message with no
-     location) is colored solid in `fallbackSeverity` -- there's nothing more
-     specific in it to highlight.
-   - `colorizeTestLine(line)` -- for one line of `node --test`'s TAP output.
-     Only the `ok`/`not ok` token is colored on a pass/fail line (never the
-     rest -- hundreds of passing tests would drown out anything that needs
-     attention), a failure is also reported as a GitHub annotation (a TAP line
-     carries no file/line to point at instead), and a nonzero `# fail N`
-     summary is colored solid red as the one line allowed to be "whole-line
-     red" for something other than a single diagnostic.
-   - `pipeColorized(readable, colorizeLine, out?)` streams a spawned child's
-     output through one of the above line by line, as it arrives.
-     `test.ts` uses it because `stdio: "inherit"` (the previous behavior) hands
-     the child's fd straight to the terminal, bypassing ts0 -- and therefore
-     any recoloring -- entirely.
+1. **`::error::`/`::warning::` GitHub Actions annotations.** `annotate()` is a no-op unless `GITHUB_ACTIONS=true` (`isGithubActions()`); the workflow command syntax would otherwise print as literal `::error::...` noise in a local terminal. `formatAnnotation` implements GitHub's escaping rules for the message (`%`/CR/LF) and for property values (those plus `:`/`,`).
+2. **Color support detection.** `colorEnabled()` forces color ON under GitHub Actions even though its stdout is a pipe, not a TTY -- the Actions log viewer renders ANSI same as a real terminal, so a bare `stream.isTTY` check would leave every CI run uncolored. Outside Actions it follows the stream's own TTY-ness. `NO_COLOR` and `FORCE_COLOR` (the usual community env vars) take precedence over both.
+3. **Recoloring known output shapes**, via `colors()` (raw ANSI wrappers) and two higher-level functions built on it:
+   - `colorizeErrorBlock(text, fallbackSeverity)` -- for a block of ts0's own error/warning text (a `BuildResult.errors`/`.warnings` entry, or `runTypecheck()`'s `.output`). It parses each line against the tsc/ts0 diagnostic shape `file(line,col): error TSxxxx: message` (also produced by `formatDiagnostic`/`formatEsbuildDiagnostic` for esbuild's own messages, so every target -- default, js, HTML -- reports the same shape). A line matching it gets its location dimmed and its `error`/`warning` marker brightened, in that line's own severity color, and is reported as a GitHub annotation with the parsed file/line/col. Any other non-blank line (a header like "Build failed:", a message with no location) is colored solid in `fallbackSeverity` -- there's nothing more specific in it to highlight.
+   - `colorizeTestLine(line)` -- for one line of `node --test`'s TAP output. Only the `ok`/`not ok` token is colored on a pass/fail line (never the rest -- hundreds of passing tests would drown out anything that needs attention), a failure is also reported as a GitHub annotation (a TAP line carries no file/line to point at instead), and a nonzero `# fail N` summary is colored solid red as the one line allowed to be "whole-line red" for something other than a single diagnostic.
+   - `pipeColorized(readable, colorizeLine, out?)` streams a spawned child's output through one of the above line by line, as it arrives. `test.ts` uses it because `stdio: "inherit"` (the previous behavior) hands the child's fd straight to the terminal, bypassing ts0 -- and therefore any recoloring -- entirely.
 
 ## Why esbuild's own logging is off
 
-`esbuild-base.ts` sets `logLevel: "silent"` in `baseEsbuildOptions()`. Without
-it, esbuild's Node API prints its own colorized copy of every error/warning to
-the terminal in addition to returning them in `result.errors`/`.warnings` --
-verified directly against the installed esbuild version. Two independently
-colored, uncoordinated reports of the same diagnostic is strictly worse than
-one; ts0's own reporting (annotated, and formatted the same as every other
-target) is the single source of truth. `build-html.ts`'s three inline esbuild
-calls already set this per-call; the shared option covers the other two
-targets (`build.ts`'s default target, `build-js.ts`).
+`esbuild-base.ts` sets `logLevel: "silent"` in `baseEsbuildOptions()`. Without it, esbuild's Node API prints its own colorized copy of every error/warning to the terminal in addition to returning them in `result.errors`/`.warnings` -- verified directly against the installed esbuild version. Two independently colored, uncoordinated reports of the same diagnostic is strictly worse than one; ts0's own reporting (annotated, and formatted the same as every other target) is the single source of truth. `build-html.ts`'s three inline esbuild calls already set this per-call; the shared option covers the other two targets (`build.ts`'s default target, `build-js.ts`).
 
 ## Adding a new error/warning surface
 
-Format the message as `formatDiagnostic(file, line, col, severity, message,
-code?)` (or reuse `formatEsbuildDiagnostic` if you already have an
-`esbuild.Message`) whenever you have a real file/line to report, then pass the
-resulting text through `colorizeErrorBlock` (or `colorizeTestLine` for
-TAP-shaped output) at the point where it's printed to the console -- never
-inside `runTypecheck()`/`buildSelf()`/etc. themselves, so the raw text stays
-available uncolored for anything that parses or asserts on it (existing unit
-tests, `.dats` suites, a future caller).
+Format the message as `formatDiagnostic(file, line, col, severity, message, code?)` (or reuse `formatEsbuildDiagnostic` if you already have an `esbuild.Message`) whenever you have a real file/line to report, then pass the resulting text through `colorizeErrorBlock` (or `colorizeTestLine` for TAP-shaped output) at the point where it's printed to the console -- never inside `runTypecheck()`/`buildSelf()`/etc. themselves, so the raw text stays available uncolored for anything that parses or asserts on it (existing unit tests, `.dats` suites, a future caller).
