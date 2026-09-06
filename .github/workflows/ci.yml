@@ -23,15 +23,14 @@ jobs:
       - name: Build ts0
         run: node --experimental-strip-types src/cli.ts build
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Hand off the build
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: ts0
           path: dist/ts0
 
   test:
     needs: build
-    # bwrap gets no user namespace on the plain pool, so dats falls back to docker.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +42,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Take the build hand-off
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: ts0
           path: dist
@@ -58,25 +57,27 @@ jobs:
         with:
           tests: tests/
 
-      # Not a test (tests/samples.dats asserts these): it makes the artifacts below downloadable.
-      - name: Build html samples for the artifacts below
+      # Not a test (tests/samples.dats asserts these): it builds the pages the
+      # publish job serves, so a human can open a sample build in a browser.
+      - name: Build html samples for the sample site
         run: |
           ts0 build --config samples/html/ts0.json
           ts0 build --config samples/html-jsx/ts0.json
 
-      - name: Upload html sample build
+      # Both samples emit index.html, so each gets its own directory.
+      - name: Stage the sample site
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: html-sample
-          path: samples/html/dist/index.html
+        run: |
+          mkdir -p sample-site/html sample-site/html-jsx
+          cp samples/html/dist/index.html sample-site/html/index.html
+          cp samples/html-jsx/dist/index.html sample-site/html-jsx/index.html
 
-      - name: Upload html-jsx sample build
+      - name: Hand off the sample site
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
-          name: html-jsx-sample
-          path: samples/html-jsx/dist/index.html
+          name: html-samples
+          path: sample-site
 
   # Packages ts0 for buildhost; the contract is docs/prebuilt-ts0-cjs.md.
   prebuilt:
@@ -98,12 +99,11 @@ jobs:
       - name: Bare-node smoke (node on PATH, no npm)
         run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
 
-      - name: Upload prebuilt artifacts
-        uses: actions/upload-artifact@v4
+      - name: Hand off the prebuilt bundle
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: prebuilt
           path: build-prebuilt/out/
-          if-no-files-found: error
 
   # Repeats the smoke on real arm64, so the linux/arm64 esbuild native runs end to end.
   smoke-prebuilt-linux-arm64:
@@ -120,7 +120,7 @@ jobs:
       # The samples resolve @types/node and preact here: project deps, not toolchain.
       - run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: prebuilt
           path: build-prebuilt/out
@@ -135,11 +135,45 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      actions: read
+      # write, not read: the cache-cleanup step deletes this run's hand-offs.
+      actions: write
       checks: read
       artifact-metadata: write
       deployments: write
     steps:
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: prebuilt
+          path: build-prebuilt/out
+
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
         with:
-          artifact_name: prebuilt
+          path: build-prebuilt/out
+
+      - uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: html-samples
+          path: sample-site
+
+      # buildhost serves a site under one path segment, so a branch name with a
+      # slash in it needs flattening first.
+      - name: Site branch name
+        id: sitebranch
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            core.setOutput('branch', (github.ref_name || 'branch').replace(/[^A-Za-z0-9._-]/g, '-'));
+
+      - name: Publish the html samples
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-site@master
+        with:
+          server: https://pazer.build
+          project: ts0
+          branch: ${{ steps.sitebranch.outputs.branch }}
+          source_dir: sample-site
+          public: 'true'
+
+      # The hand-offs are this run's only; nothing outside it reads them.
+      - name: Clean up the cache hand-offs
+        if: always()
+        uses: wow-look-at-my/actions@cache-cleanup#latest

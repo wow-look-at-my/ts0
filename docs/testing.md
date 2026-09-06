@@ -18,8 +18,10 @@ CI builds `dist/ts0`, `npm link`s it, fetches the dats binary and runs the suite
 
 The unit-test step invokes node directly, never `ts0 test`. So it gets none of what `ts0 test` does for a suite. In particular it gets no explicit `--test-concurrency`. node then runs test files at `availableParallelism() - 1`, which is 1 on a two-core runner.
 
-Every suite declares `network: false`. A local run therefore proves that a build never needs a network. **CI runs `--no-sandbox` and therefore does not prove it.** The org's self-hosted runner denies unprivileged user namespaces. bwrap cannot start, and there is no docker fallback. Run the suites locally, with bwrap installed, to exercise the sandboxed contract.
+Every suite declares `network: false`, so a run proves that a build never needs a network. The dats action supplies the backend on its own: it installs bubblewrap and clears Ubuntu's `apparmor_restrict_unprivileged_userns`, which otherwise denies bwrap the user namespace it needs. The action's surface has no way to turn the sandbox off, so a green leg is a sandboxed leg.
 
-CI also builds the two HTML samples into the workspace after the suites. That step is not a test. It only produces the downloadable artifacts.
+CI also builds the two HTML samples into the workspace after the suites. That step is not a test. It stages the pages the publish job serves, so a human can open a sample build in a browser.
+
+Nothing here uses GitHub Actions artifact storage. A job-to-job hand-off rides `wow-look-at-my/actions@cache-upload#latest` and its download sibling, and the publish job deletes the run's hand-offs at the end. The org's artifact quota is billed in accrued GB-hours, which deleting cannot free.
 
 If you change CLI behavior, update the relevant `samples/*` and the matching `tests/*.dats` suite so the new behavior is covered.
