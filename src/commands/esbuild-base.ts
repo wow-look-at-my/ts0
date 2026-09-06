@@ -23,10 +23,15 @@ export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 		minify: config.minify,
 		sourcemap: config.sourcemap,
 		target: "esnext",
-		// Node-specific: keep node_modules out of the bundle.
-		...(config.target === "node" && {
-			packages: "external",
-		}),
+		// Node code has a run-time module resolver, so an imported package stays
+		// a `require("pkg")` the installed node_modules answers. bundleDependencies
+		// compiles those packages in instead, for an output that must run where
+		// its node_modules does not exist. Browser code has no such resolver and
+		// always bundles.
+		...(config.target === "node" &&
+			!config.bundleDependencies && {
+				packages: "external",
+			}),
 		// JSX support (esbuild). Spread before the caller's `config.esbuild` so
 		// an explicit esbuild.jsx can still override it.
 		...(config.jsx && { jsx: config.jsx }),

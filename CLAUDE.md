@@ -4,12 +4,9 @@ Notes for Claude working in this repository.
 
 ## What this project is
 
-`ts0` &mdash; a small TypeScript framework CLI that wraps esbuild, the TypeScript
-compiler, and Node's built-in test runner. The repository directory is named
-`bundler`; the published package and binary are both named `ts0`.
+`ts0` -- a small TypeScript framework CLI that wraps esbuild, the TypeScript compiler, and Node's built-in test runner. The repository directory is named `bundler`. The published package and binary are both named `ts0`.
 
-The CLI exposes four commands: `init`, `build`, `run`, `test`. See `README.md` for
-user-facing documentation.
+The CLI exposes four commands: `init`, `build`, `run`, `test`. See `README.md` for user-facing documentation.
 
 ## Layout
 
@@ -48,24 +45,18 @@ tests/                  # dats behavioural suites (all of CI's assertions)
     gate.dats           # type-check gate + explicit-`any` ban, every path
     samples.dats        # every sample under samples/
     html-referenced.dats # the multi-file HTML target
+    node-target.dats    # bundleDependencies, and running a test in its own module format
     action.dats         # action.yml: always test then build, no command input
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```
 
-`ts0` is self-hosting: `package.json`'s `build` script invokes the CLI from
-source via `node --experimental-strip-types src/cli.ts build`, which reads the
-repo's own `ts0.json` and produces `dist/ts0`. Every `samples/*` directory is a
-nested ts0 project, so that one command builds them too &mdash; see "Nested
-projects" under Type-checking.
+`ts0` is self-hosting: `package.json`'s `build` script invokes the CLI from source via `node --experimental-strip-types src/cli.ts build`, which reads the repo's own `ts0.json` and produces `dist/ts0`. Every `samples/*` directory is a nested ts0 project, so that one command builds them too -- see "Nested projects" under Type-checking.
 
 ## Runtime requirements
 
-- Node.js **22 or newer**. The CLI relies on `--experimental-strip-types` and
-    the built-in `node --test` runner, both Node 22+ features. Do not lower the
-    `engines.node` field.
-- This is a Node/TypeScript project. **Do not** apply the `go-toolchain` rules
-    here &mdash; they do not apply.
+- Node.js **22 or newer**. The CLI relies on `--experimental-strip-types` and the built-in `node --test` runner, both Node 22+ features. Do not lower the `engines.node` field.
+- This is a Node/TypeScript project. **Do not** apply the `go-toolchain` rules here -- they do not apply.
 
 ## Working on the code
 
@@ -76,495 +67,199 @@ node --experimental-strip-types src/cli.ts <cmd>    # run from source without bu
 npm link && dats test tests/                        # behavioural suites (needs bwrap)
 ```
 
-The suites need the linked `ts0` on PATH (hence `npm link`) and bubblewrap for
-the sandbox; `.dats` files are tab-indented YAML.
+The suites need the linked `ts0` on PATH, hence `npm link`, and bubblewrap for the sandbox. A `.dats` file is tab-indented YAML.
 
-Unit tests are every `src/**/*.test.ts` (`node --experimental-strip-types
---test`), and every `tests/*.dats` file is a behavioural suite run by
-[dats](https://github.com/wow-look-at-my/dats): CI builds `dist/ts0`, `npm
-link`s it, and each suite stages a project and asserts what the build WROTE.
-A staged project gets the repo's `node_modules` symlinked in, the position it
-resolves `@types/node`/`preact` from when built in place. `network: false` on
-every file proves a build never needs one; CI itself runs `--no-sandbox` (the
-org's self-hosted runner denies unprivileged user namespaces), so run the
-suites locally (with bwrap installed) to exercise the sandboxed contract.
-What each suite and each CI step actually covers: `docs/testing.md`.
+Unit tests are every `src/**/*.test.ts`, run by `node --experimental-strip-types --test`. Every `tests/*.dats` file is a behavioural suite run by [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0` and `npm link`s it, then each suite stages a project and asserts what the build WROTE. A staged project gets the repo's `node_modules` symlinked in. That is the position it resolves `@types/node` and `preact` from when it is built in place. `network: false` on every file proves a build never needs a network. CI itself runs `--no-sandbox`, because the org's self-hosted runner denies unprivileged user namespaces. Run the suites locally, with bwrap installed, to exercise the sandboxed contract. `docs/testing.md` says what each suite and each CI step covers.
 
-If you change CLI behavior, update the relevant `samples/*` and the matching
-`tests/*.dats` suite so the new behavior is covered.
+If you change CLI behavior, update the relevant `samples/*` and the matching `tests/*.dats` suite so the new behavior is covered.
 
 ## Conventions
 
 - **Indentation:** tabs (4-wide), per `.editorconfig`. Match this in every file.
-- **Modules:** ESM only (`"type": "module"`). Use `.ts` extensions in relative
-    imports (e.g. `import { build } from "./commands/build.ts"`) so
-    `--experimental-strip-types` resolves them.
-- **Dependencies:** keep them minimal. Production deps are `esbuild`,
-    `typescript`, and `@types/node` (ts0 embeds and re-exposes it via
-    `typeRoots` so a Node-target project needs no install of its own -- see
-    docs/prebuilt-ts0-cjs.md). The one dev dep is `preact`, only so the
-    `samples/html-jsx` regression sample can resolve `preact/jsx-runtime` when
-    CI builds it. Don't add a CLI parser, a test framework, or a bundler
-    abstraction &mdash; the whole point is that ts0 stays small.
-- **Argument parsing:** `src/cli.ts` parses `process.argv` by hand. New commands
-    should follow the same pattern (no new dependency).
+- **Modules:** ESM only (`"type": "module"`). Use `.ts` extensions in relative imports (e.g. `import { build } from "./commands/build.ts"`) so `--experimental-strip-types` resolves them.
+- **Dependencies:** keep them minimal. The production deps are `esbuild`, `typescript` and `@types/node`. The last one is embedded and re-exposed through `typeRoots`, so a Node-target project needs no install of its own. See docs/prebuilt-ts0-cjs.md. The one dev dep is `preact`, only so the `samples/html-jsx` regression sample resolves `preact/jsx-runtime` when CI builds it. Do not add a CLI parser, a test framework, or a bundler abstraction. The whole point is that ts0 stays small.
+- **Argument parsing:** `src/cli.ts` parses `process.argv` by hand. A new command must follow the same pattern, with no new dependency.
 
 ## Output: colors + GitHub Actions annotations
 
-`reporter.ts` is the one place that formats a diagnostic for display: ANSI
-color (forced on under `GITHUB_ACTIONS=true`, since its log viewer renders
-color despite stdout being a pipe) and `::error::`/`::warning::` annotations
-(no-op outside Actions). Depth, including why esbuild's own logging is off:
-`docs/reporter.md`.
+`reporter.ts` is the one place that formats a diagnostic for display. It owns ANSI color, forced on under `GITHUB_ACTIONS=true` because that log viewer renders color although stdout is a pipe. It also owns the `::error::` and `::warning::` annotations, which do nothing outside Actions. `docs/reporter.md` carries the depth, including why esbuild's own logging is off.
 
 ## Configuration model
 
-`config.ts` defines `Ts0Config` and a single `DEFAULT_CONFIG` object. When
-adding a new option:
+`config.ts` defines `Ts0Config` and a single `DEFAULT_CONFIG` object. When adding a new option:
 
 1. Add the field to the `Ts0Config` interface and `DEFAULT_CONFIG`.
-2. If it changes build behavior shared by the default and js targets, thread it
-    through `baseEsbuildOptions()` in `commands/esbuild-base.ts` (both targets
-    call it); target-specific options live in `build.ts` / `build-js.ts`. The
-    user-supplied `esbuild` field is spread last so it stays an escape hatch
-    &mdash; keep it that way.
+2. If it changes build behavior shared by the default and js targets, thread it through `baseEsbuildOptions()` in `commands/esbuild-base.ts`. Both targets call that. A target-specific option lives in `build.ts` or `build-js.ts` instead. The user-supplied `esbuild` field is spread last so it stays an escape hatch. Keep it that way.
 3. Document it in `README.md`'s configuration table.
 
-`loadConfig()` walks up from the cwd looking for `ts0.json` and falls back to
-defaults plus auto-detected entry. Don't break the no-config-file path.
+`loadConfig()` walks up from the cwd to look for `ts0.json`. It falls back to the defaults plus an auto-detected entry. Do not break the no-config-file path.
 
 ## Type-checking
 
-**Type-checking is an unskippable gate: there is NO way to build or run code
-that hasn't passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the
-single chokepoint, called from every command that emits or executes code:
+**Type-checking is an unskippable gate. There is NO way to build or run code that has not passed `tsc`.** The exported `runTypecheck(config, rootDir)` is the single chokepoint. Every command that emits or executes code calls it:
 
-- `build()` runs it before it emits anything and returns a failed `BuildResult`
-    (no output written) on failure. Every path that produces output goes through
-    `build()` (`ts0 build`, `ts0 run` without `--no-build`, and any programmatic
-    caller), so none can emit an un-checked artifact. Do **not** move the check
-    back up into the command layer &mdash; that reintroduces the hole where
-    `ts0 run` bundled and executed un-type-checked code.
-- `run()` runs it for the `--no-build` path before handing sources to
-    `node --experimental-strip-types`. Strip-types only *erases* annotations, it
-    does **not** type-check, so without this gate `ts0 run --no-build` would
-    execute broken code. `--no-build` therefore skips only the bundle/artifact,
-    never the check.
-- `test()` runs it before spawning `node --test`. The test runner uses
-    `--experimental-strip-types` too, so an un-checked test run would execute an
-    invalid program. A type error anywhere in the project fails `ts0 test` and no
-    test process is spawned.
+- `build()` runs it before it emits anything, and returns a failed `BuildResult` with no output written. Every path that produces output goes through `build()`: `ts0 build`, `ts0 run` without `--no-build`, and any programmatic caller. None of them can emit an un-checked artifact. Do **not** move the check back up into the command layer. That reintroduces the hole where `ts0 run` bundled and executed un-type-checked code.
+- `run()` runs it for the `--no-build` path, before it hands sources to `node --experimental-strip-types`. Strip-types only *erases* annotations. It does **not** type-check, so without this gate `ts0 run --no-build` executes broken code. `--no-build` therefore skips only the bundle and the artifact, never the check.
+- `test()` runs it before it compiles or spawns anything. The compile erases type annotations without checking them, so an un-checked test run executes an invalid program. A type error anywhere in the project fails `ts0 test`, and no test process is spawned.
 
-The gate is more than `tsc`: it also bans explicit `any` (see "Explicit `any`
-is banned" below), so everything said here about unskippability covers that
-ban too.
+The gate is more than `tsc`. It also bans explicit `any`, as "Explicit `any` is banned" below describes. Everything said here about unskippability covers that ban too.
 
-There is intentionally **no escape hatch** &mdash; every command that runs or
-emits code type-checks first. If you add a new command (or a new branch in an
-existing one) that runs/emits code, it MUST call `runTypecheck()` first and bail
-on failure. The only thing `--no-build` and the like may skip is the
-bundle/artifact, never the check.
+There is intentionally **no escape hatch**. Every command that runs or emits code type-checks first. A new command, or a new branch in an existing one, that runs or emits code MUST call `runTypecheck()` first and bail on failure. The only thing `--no-build` and its peers may skip is the bundle and the artifact, never the check.
 
-`runTypecheck()` writes a temporary `.ts0-tsconfig.json` (gitignored), runs
-`tsc --noEmit` against it, and deletes it in a `finally`. The TypeScript binary
-is resolved from `ts0`'s own `node_modules` via `createRequire` so the user's
-project doesn't need its own `typescript` install. Preserve both behaviors.
-`build()`, `run()`, and `test()` each already hold a loaded config, so they call
-`runTypecheck(config, rootDir)` directly rather than re-loading.
+`runTypecheck()` writes a temporary `.ts0-tsconfig.json`, which is gitignored, runs `tsc --noEmit` against it, and deletes it in a `finally`. It resolves the TypeScript binary from `ts0`'s own `node_modules` through `createRequire`, so the user's project needs no `typescript` install. Preserve both behaviors. `build()`, `run()` and `test()` each already hold a loaded config, so each calls `runTypecheck(config, rootDir)` directly rather than re-loading.
 
-The tsconfig generation is shared: `generatedCompilerOptions(config, rootDir)`
-builds the compiler options used by BOTH the gate and the js target's
-declaration emit (`emitDeclarations`, temp file `.ts0-tsconfig-emit.json`, also
-gitignored), and `runTsc()` owns the write-temp-tsconfig/exec/cleanup plumbing
-for both. Keep them shared &mdash; if the two passes drift, declaration emit
-can succeed on code the gate rejects (or vice versa). The declaration pass is
-**additional** to the gate, never a replacement: it compiles only the js
-target's entry modules (+ ambient `*.d.ts`), so it does not see test files or
-sources outside the entry set the way the project-wide gate does. Do not
-"optimize" the gate away on the build path.
+The tsconfig generation is shared. `generatedCompilerOptions(config, rootDir)` builds the compiler options used by BOTH the gate and the js target's declaration emit. That emit is `emitDeclarations`, whose temp file `.ts0-tsconfig-emit.json` is also gitignored. `runTsc()` owns the write-temp-tsconfig, exec and cleanup plumbing for both. Keep them shared. If the two passes drift, declaration emit can succeed on code the gate rejects, or the reverse. The declaration pass is **additional** to the gate, never a replacement. It compiles only the js target's entry modules plus the ambient `*.d.ts` files. It therefore does not see test files, or sources outside the entry set, the way the project-wide gate does. Do not "optimize" the gate away on the build path.
 
 Key details of the generated tsconfig:
 
-- **`lib` depends on target.** Browser code (an explicit `"browser"` target, or
-    *any* HTML entry &mdash; always browser) gets `["ESNext", "DOM", "DOM.Iterable"]`
-    so `document`/`fetch`/`addEventListener` resolve. Node code gets `["ESNext"]`
-    only; its globals come from `@types/node`. Without the DOM lib, every
-    HTML/browser project would fail with "Cannot find name 'document'".
-- **HTML entries ARE type-checked.** (They used to be skipped.) An HTML project's
-    `.ts`/`.tsx` files are checked before bundling, so a type error in HTML
-    scripts fails the build like any other project. Do not reintroduce an
-    entry-shaped skip; the `tests/gate.dats` case "a type error in an HTML
-    entry fails the build" exists to keep this honest. Its project is staged
-    inline, not kept under `samples/`: build and test recurse into every
-    nested ts0 project, so a permanently-broken one in the tree would fail the
-    repo's own build forever.
-- **The configured entry is named in `include`, not just globbed**
-    (`entryTypeCheckPaths`). tsc skips dot-directories while expanding a leading
-    wildcard but never a path segment it was handed, so without this an entry
-    under `.github/`, `.config/`, … is bundled against an EMPTY program and the
-    build reports success. A directory entry yields one glob per TS extension,
-    but only when it actually holds TypeScript &mdash; globs matching nothing
-    would abort with TS18003 instead of letting build-js report "No TypeScript
-    modules found". An HTML entry yields none (its scripts come from the markup).
-- **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks
-    the project; if there are no `.ts/.tsx/.mts/.cts` files (e.g. a plain-JS HTML
-    entry), the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`
-    "No inputs were found" and would wrongly block a perfectly valid JS-only build.
-- **Nested ts0 projects are excluded** (any subdirectory with its own `ts0.json`,
-    via `findNestedProjectDirs`). Without this, building ts0 itself would
-    type-check `samples/html-jsx/*.tsx` under the root config (no JSX) and fail
-    with `TS17004`. A nested project is type-checked on its own when built directly.
+- **`lib` depends on target.** Browser code gets `["ESNext", "DOM", "DOM.Iterable"]`, so `document`, `fetch` and `addEventListener` resolve. That covers an explicit `"browser"` target and *any* HTML entry, which is always browser. Node code gets `["ESNext"]` only, and its globals come from `@types/node`. Without the DOM lib, every HTML and browser project fails with "Cannot find name 'document'".
+- **HTML entries ARE type-checked.** They used to be skipped. An HTML project's `.ts` and `.tsx` files are checked before bundling, so a type error in HTML scripts fails the build like any other project. Do not reintroduce an entry-shaped skip. The `tests/gate.dats` case "a type error in an HTML entry fails the build" exists to keep this honest. Its project is staged inline, not kept under `samples/`. Build and test recurse into every nested ts0 project, so a permanently-broken one in the tree fails the repo's own build forever.
+- **The configured entry is named in `include`, not just globbed** (`entryTypeCheckPaths`). The compiler skips a dot-directory while it expands a leading wildcard, but never a path segment it was handed. Without this, an entry under `.github/` or `.config/` is bundled against an EMPTY program and the build reports success. A directory entry yields one glob per TS extension, but only when it actually holds TypeScript. A glob that matches nothing aborts with TS18003, instead of letting build-js report "No TypeScript modules found". An HTML entry yields none, because its scripts come from the markup.
+- **Empty source sets are skipped, not failed.** `hasTypeScriptSources()` walks the project. With no `.ts`, `.tsx`, `.mts` or `.cts` file, as in a plain-JS HTML entry, the check is a vacuous pass. Without this, `tsc` aborts with `TS18003`, "No inputs were found", and wrongly blocks a valid JS-only build.
+- **Nested ts0 projects are excluded**, meaning any subdirectory with its own `ts0.json`, through `findNestedProjectDirs`. Without this, building ts0 itself type-checks `samples/html-jsx/*.tsx` under the root config, which has no JSX, and fails with `TS17004`. A nested project is type-checked on its own when it is built directly.
 
-**Watch mode re-checks on every cycle** for all three commands &mdash; a one-shot
-up-front check would let later rebuilds/re-runs slip past:
+**Watch mode re-checks on every cycle** for all three commands. A one-shot up-front check lets a later rebuild or re-run slip past:
 
-- `ts0 build --watch` (JS) adds `typecheckPlugin`, an esbuild `onStart` hook that
-    runs `runTypecheck()` and returns errors on failure, so esbuild skips writing
-    output for a rebuild that doesn't type-check. The HTML path threads a
-    `typecheck` callback into `buildHtml`, which `buildOnce` runs before each
-    rebuild and bails (writing nothing) on failure. Either way the previous good
-    output stays in place rather than being overwritten with something broken.
-- `ts0 test --watch` does **not** use `node --test --watch` (it re-runs tests on
-    change without re-type-checking, which would run an invalid program). Instead
-    `test()` owns the loop: an `fsWatch` debounces changes into a `cycle()` that
-    type-checks, then runs the tests one-shot only if the check passes. Do not
-    switch it back to `node --test --watch`.
+- `ts0 build --watch` on the JS path adds `typecheckPlugin`. That is an esbuild `onStart` hook. It runs `runTypecheck()` and returns errors on failure, so the bundler skips writing output for a rebuild that does not type-check. The HTML path threads a `typecheck` callback into `buildHtml`. `buildOnce` runs that before each rebuild and bails on failure, writing nothing. Either way the previous good output stays in place, rather than being overwritten with something broken.
+- `ts0 test --watch` does **not** use `node --test --watch`. That re-runs tests on change without re-type-checking, which runs an invalid program. `test()` owns the loop instead. An `fsWatch` debounces changes into a `cycle()` that type-checks, then runs the tests one-shot only if the check passes. Do not switch it back to `node --test --watch`. The watcher ignores the compiled test copies a cycle writes, or each run schedules the next one.
 
-Module resolution in the generated tsconfig follows who consumes the code: a
-**Node-target single-entry** app &mdash; the one case where the output is
-resolved by Node's own module system &mdash; uses `NodeNext` (`.ts` extensions
-required), while everything esbuild compiles &mdash; the **js library target**,
-any **browser-target** entry, and **HTML** entries &mdash; uses `Bundler`
-resolution to match esbuild, so extensionless relative imports and
-loader-backed imports (`import x from "./y.wgsl"`) type-check exactly as the
-bundler resolves them.
+### `ts0 test` compiles each test file; it does not strip it
 
-The gate's exclusions are the output dir, nested ts0 projects, and any
-directories listed in the config's `exclude` field (for trees that type-check
-under their own separate tsconfig &mdash; a test harness with different types,
-an experiment dir). `exclude` never changes what gets built, only what the
-gate checks.
+`compileTests` in `commands/test.ts` bundles every discovered test file with `baseEsbuildOptions`, the same settings the build uses. `node --test` then runs the results. Three properties are load-bearing:
 
-`typecheckExcludeDirs(config, rootDir)` owns that list, and `ts0 test` leaves
-the same directories out of its own discovery, so it never spawns a test this
-gate did not check. Nothing on that list goes unchecked, though &mdash; see
-"Nested projects" below for the recursion that covers them.
+- **The format is the source's own.** It comes from the nearest package.json, with `.mts` and `.cts` outranking it, in an extension that states it: `.ts0.cjs` or `.ts0.mjs`. `--experimental-strip-types` only erases annotations. It cannot turn `import` into `require`, so a `"type": "commonjs"` project passed the gate and died inside node on "Cannot use import statement outside a module". Compiling one format into the other is just as wrong. It drops `__dirname`, `require` and `require.main`, or it drops `import.meta`. The test then fails on a global that was there a moment ago. esbuild takes one format per call. The files are therefore grouped by format.
+- **The copy is written BESIDE its source**, never under a build directory. A test that reads a fixture through `import.meta.dirname` or `__dirname` has to see the directory it was written in. The copy is deleted in a `finally`. `node --test` output is rewritten to name the source, by `sourceNameRewriter`, from the mapping the compile produced.
+- **`require.main === module` in a module under test always fires**, because every module in one bundle shares one module object. Nothing can fix that here. A module under test exports its work and leaves the invocation to the entry file. `tests/node-target.dats` pins this, so it is learned from a test rather than from a mystifying CI failure.
+
+Module resolution in the generated tsconfig follows who consumes the code. A **Node-target single-entry** app uses `NodeNext`, which requires `.ts` extensions. That is the one case where Node's own module system resolves the output. Everything esbuild compiles uses `Bundler` resolution to match esbuild: the **js library target**, any **browser-target** entry, and every **HTML** entry. An extensionless relative import and a loader-backed import, such as `import x from "./y.wgsl"`, therefore type-check exactly as the bundler resolves them.
+
+The gate excludes three things: the output dir, nested ts0 projects, and any directory listed in the config's `exclude` field. That field is for a tree that type-checks under its own separate tsconfig, such as a test harness with different types or an experiment dir. `exclude` never changes what gets built. It changes only what the gate checks.
+
+`typecheckExcludeDirs(config, rootDir)` owns that list. `ts0 test` leaves the same directories out of its own discovery, so it never spawns a test this gate did not check. Nothing on that list goes unchecked, though. See "Nested projects" below for the recursion that covers them.
 
 ### Nested projects: recurse, never skip
 
-A subdirectory with its own `ts0.json` is a separate project, and **`ts0 build`
-and `ts0 test` recurse into every one of them** (`findNestedProjectDirs`, then
-`build`/`testTree` re-entering with that project's config). Depth is unlimited
-&mdash; each nested run recurses in turn &mdash; every project runs even after
-one fails, and any failure fails the parent.
+A subdirectory with its own `ts0.json` is a separate project. **`ts0 build` and `ts0 test` recurse into every one of them.** `findNestedProjectDirs` finds them, then `build` or `testTree` re-enters with that project's config. Depth is unlimited, because each nested run recurses in turn. Every project runs even after one fails, and any failure fails the parent.
 
-This is the whole reason the parent's gate may leave those directories out: a
-nested project's settings (JSX, target, loaders) make it uncheckable under the
-parent's tsconfig, so the parent **delegates** rather than ignores. Never
-convert that delegation back into a skip &mdash; a nested project dropped from
-both the gate and the recursion is code nothing checks, reported green. Equally,
-never fold nested files into the parent's own run: they would execute under a
-config they were not written for, un-type-checked.
+This is the whole reason the parent's gate may leave those directories out. A nested project's settings, such as JSX, target and loaders, make it uncheckable under the parent's tsconfig. The parent therefore **delegates** rather than ignores. Never convert that delegation back into a skip. A nested project dropped from both the gate and the recursion is code nothing checks, reported green. Equally, never fold nested files into the parent's own run. They then execute under a config they were not written for, un-type-checked.
 
-`ts0 run` is the one exception, and only because it executes a single entry:
-it builds its own project (`selfOnly`) and nothing else.
+`ts0 run` is the one exception, and only because it executes a single entry. It builds its own project (`selfOnly`) and nothing else.
 
-Consequence for this repo: `ts0 build` at the root builds every `samples/*`
-project, and `ts0 test` runs their tests. A deliberately-broken fixture
-therefore cannot live in the tree &mdash; stage it inline from a `.dats` test
-instead.
+The consequence for this repo: `ts0 build` at the root builds every `samples/*` project, and `ts0 test` runs their tests. A deliberately-broken fixture therefore cannot live in the tree. Stage it inline from a `.dats` test instead.
 
 ### Explicit `any` is banned (unconditionally)
 
-`strict` gives `noImplicitAny`; tsc has **no flag at all** for an *explicit*
-`any`, so ts0 enforces that itself in `commands/explicit-any.ts`, as a second
-pass inside `runTypecheck()` (after tsc, so a syntax error is reported as
-one). Every `any` type annotation is an error &mdash; `x: any`, `x as any`,
-`<any>x`, `any[]`, `Promise<any>`, `type A = any` &mdash; and there is **no
-config option and no escape hatch**: the ban applies even with
-`"strict": false`, exactly like the gate itself. A directory in `exclude` is
-skipped by this pass too (same exclusion list as the gate).
+`strict` gives `noImplicitAny`. The compiler has **no flag at all** for an *explicit* `any`. ts0 enforces that itself in `commands/explicit-any.ts`, as a second pass inside `runTypecheck()`. The pass runs after tsc. A syntax error is therefore reported as one. Every `any` type annotation is an error: `x: any`, `x as any`, `<any>x`, `any[]`, `Promise<any>`, `type A = any`. There is **no config option and no escape hatch**. The ban applies even with `"strict": false`, exactly like the gate itself. A directory in `exclude` is skipped by this pass too, from the same exclusion list as the gate.
 
-- **It parses; it does not text-search.** `checkNoExplicitAny` loads the
-    TypeScript compiler API (`createRequire(import.meta.url)("typescript")`,
-    same resolution as the tsc binary, memoized) and walks for
-    `SyntaxKind.AnyKeyword`, which only ever occurs as a type. A text search
-    would fail valid builds on identifiers (`anyOf`), object keys, strings,
-    comments, regexes, and JSX prose ("any questions?") &mdash;
-    `samples/html-jsx` carries such a tagline on purpose as the regression
-    guard. Keep it a parse. A cheap `/\bany\b/` pre-filter skips files that
-    can't match, so a project with none never even loads the compiler.
-- **Declaration files are scanned** (unlike the gate, whose `skipLibCheck`
-    means tsc never looks inside a `.d.ts`) &mdash; a hand-written ambient
-    declaration is project source, and it is the easiest place for an `any`
-    to hide.
-- The `.d.ts` files ts0 *emits* live in the output dir, which is excluded, and
-    can't contain an explicit `any` anyway (the sources they come from can't).
+- **It parses. It does not text-search.** `checkNoExplicitAny` loads the TypeScript compiler API through `createRequire(import.meta.url)("typescript")`, the same resolution as the tsc binary, memoized. It then walks for `SyntaxKind.AnyKeyword`, which only ever occurs as a type. A text search fails a valid build on an identifier such as `anyOf`, and on object keys, strings, comments, regexes and JSX prose ("any questions?"). `samples/html-jsx` carries such a tagline on purpose, as the regression guard. Keep it a parse. A cheap `/\bany\b/` pre-filter skips a file that cannot match. A project with none therefore never loads the compiler.
+- **Declaration files are scanned.** The gate does not scan them, because its `skipLibCheck` stops tsc from looking inside a `.d.ts`. A hand-written ambient declaration is project source. It is also the easiest place for an `any` to hide.
+- The `.d.ts` files ts0 *emits* live in the output dir, which is excluded. They cannot contain an explicit `any` anyway, because the sources they come from cannot.
 
 ## JSX
 
-`jsx`/`jsxImportSource` are threaded into esbuild from **both** the Node/TS path
-(`build.ts`) and the HTML path (`build-html.ts`'s `<script>` bundling). Keep them
-in sync: if only one path sets them, HTML+JSX projects silently fall back to
-esbuild's classic `React.createElement` transform and break Preact at runtime.
+`jsx` and `jsxImportSource` are threaded into esbuild from **both** paths. Those are the Node and TS path in `build.ts`, and the HTML path in `build-html.ts`'s `<script>` bundling. Keep them in sync. If only one path sets them, an HTML and JSX project silently falls back to esbuild's classic `React.createElement` transform, and Preact breaks at runtime.
 
 ## HTML entries
 
-When `entry` ends with `.html`, `build.ts` delegates to `commands/build-html.ts`.
-That module reads the HTML and inlines five classes of dependency:
+When `entry` ends with `.html`, `build.ts` delegates to `commands/build-html.ts`. That module reads the HTML and inlines five classes of dependency:
 
-1. `<script src="local">` &mdash; bundled with esbuild, inlined as `<script>…</script>`.
-2. `<script type="module">…inline body…</script>` &mdash; bundled via esbuild's
-    `stdin` API with `resolveDir` set to the HTML's directory, so relative imports
-    in the inline body work.
-3. `<link rel="stylesheet" href="local">` &mdash; bundled with esbuild, inlined as
-    `<style>…</style>`. The CSS bundling uses a `dataurl` loader for fonts and
-    images so `url(...)` references inside the CSS become `data:` URLs.
-4. Runtime-fetched assets &mdash; files under the entry directory (or directories
-    specified by `assetDirs`) matching the text-asset extensions in
-    `TEXT_ASSET_EXTS` and binary-asset extensions in `BINARY_ASSET_EXTS`
-    (both defined at the top of `src/commands/build-html.ts`) are embedded
-    into a `window.fetch` interceptor inserted at the top of `<head>`. The
-    interceptor template lives at
-    `src/runtime/fetch-interceptor.js` &mdash; it has a `__ASSETS_JSON__`
-    placeholder that's replaced at build time. Use `replaceAll` (not `replace`)
-    when substituting; the file's own header comment necessarily mentions the
-    placeholder name.
+1. `<script src="local">` -- bundled with esbuild, inlined as `<script>…</script>`.
+2. `<script type="module">…inline body…</script>` -- bundled via esbuild's `stdin` API with `resolveDir` set to the HTML's directory, so relative imports in the inline body work.
+3. `<link rel="stylesheet" href="local">` -- bundled with esbuild, inlined as `<style>…</style>`. The CSS bundling uses a `dataurl` loader for fonts and images, so a `url(...)` reference inside the CSS becomes a `data:` URL.
+4. Runtime-fetched assets. A file under the entry directory, or under a directory named in `assetDirs`, is embedded into a `window.fetch` interceptor at the top of `<head>`. It qualifies when its extension is in `TEXT_ASSET_EXTS` or `BINARY_ASSET_EXTS`, both defined at the top of `src/commands/build-html.ts`. The interceptor template lives at `src/runtime/fetch-interceptor.js`, and carries a `__ASSETS_JSON__` placeholder that the build replaces. Substitute with `replaceAll`, never `replace`. The file's own header comment necessarily mentions the placeholder name.
 
-5. Bookmarklet links &mdash; an `href="javascript:<local source file>"`
-    (extension `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`) is bundled as a
-    browser IIFE, **always minified** (a bookmarklet is a URL; length is the
-    constraint), percent-encoded with `encodeURIComponent`, and substituted
-    back as `javascript:<encoded>`. Real inline-JS hrefs
-    (`javascript:void(0)`) don't match the extension test and are left
-    untouched; a file-looking reference that doesn't exist is a build error.
-    encodeURIComponent escapes quotes/`&`/`#`/whitespace, so the encoded
-    bundle is attribute-safe raw.
+5. Bookmarklet links. An `href="javascript:<local source file>"`, with a `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` or `.cjs` extension, is bundled as a browser IIFE, **always minified**. A bookmarklet is a URL, and length is the constraint. It is then percent-encoded with `encodeURIComponent` and substituted back as `javascript:<encoded>`. A real inline-JS href, such as `javascript:void(0)`, does not match the extension test and is left untouched. A file-looking reference that does not exist is a build error. encodeURIComponent escapes quotes, `&`, `#` and whitespace, so the encoded bundle is attribute-safe raw.
 
-`.json` is deliberately not in the asset extension list, so `ts0.json` and
-`package.json` aren't picked up. Disable embedding entirely with
-`"embedAssets": false` in `ts0.json`.
+`.json` is deliberately not in the asset extension list, so `ts0.json` and `package.json` are not picked up. Disable embedding entirely with `"embedAssets": false` in `ts0.json`.
 
-When `assetDirs` is set in `ts0.json`, `build-html.ts` scans only those
-directories (relative to rootDir) instead of the HTML entry's directory.
-Asset keys in the interceptor map are relative to rootDir, so
-`"assetDirs": ["people"]` produces keys like `people/foo.xml`. The
-interceptor also exposes `window.__ts0_embedded_paths__` &mdash; an array
-of all embedded asset keys &mdash; so client code can discover available
-assets at runtime.
+When `assetDirs` is set in `ts0.json`, `build-html.ts` scans only those directories, relative to rootDir, instead of the HTML entry's directory. An asset key in the interceptor map is relative to rootDir, so `"assetDirs": ["people"]` produces a key such as `people/foo.xml`. The interceptor also exposes `window.__ts0_embedded_paths__`, an array of all embedded asset keys, so client code discovers the available assets at runtime.
 
-External URLs (`https://`, `//`, `data:`, etc.) are left alone. Tag attributes
-on the script/link (other than `src`/`href`/`rel`/`type`) are preserved.
+An external URL, such as `https://`, `//` or `data:`, is left alone. Every tag attribute on the script or link is preserved, except `src`, `href`, `rel` and `type`.
 
-Keep the HTML parser regex-based and dependency-free &mdash; do not add an HTML
-parser package.
+Keep the HTML parser regex-based and dependency-free -- do not add an HTML parser package.
 
 ### Referenced assets (`inlineAssets: false`)
 
-`"inlineAssets": false` (HTML entries only) bundles each referenced local
-script/stylesheet to its own file under `assetPath` and rewrites the tag's
-`src`/`href` instead of inlining. Load-bearing invariants:
+`"inlineAssets": false` (HTML entries only) bundles each referenced local script/stylesheet to its own file under `assetPath` and rewrites the tag's `src`/`href` instead of inlining. Load-bearing invariants:
 
-- **The default is unchanged inline mode.** `inlineAssets` absent or `true`
-    emits exactly the same bytes as before; `assets` comes back empty from
-    `processHtml` and no other code path differs.
-- **Output name = source basename + bundled extension**, no content hash
-    (`src/main.ts` &rarr; `main.js`). Two sources that want the same name are a
-    **build error naming both** &mdash; never an overwrite, never an invented
-    suffix.
-- **Nothing is written when the pass has errors.** `buildOnce` returns before
-    writing the HTML or any asset, so a new shell can never point at bundles
-    that were not emitted (and in watch mode the previous good output stays).
-- **esbuild is given the `outfile`**, and *every* `outputFiles` entry is
-    written &mdash; an entry that imports CSS makes esbuild emit a companion
-    `.css`, which only lands beside the JS if esbuild knows the real path.
-- `assetPath` is the URL prefix verbatim; minus a leading `/` or `./` it is the
-    subdirectory under the HTML's out dir. `..` in it is a config error
-    (`loadConfig`), not something to sanitize.
+- **The default is unchanged inline mode.** `inlineAssets` absent or `true` emits exactly the same bytes as before. `assets` comes back empty from `processHtml`, and no other code path differs.
+- **Output name = source basename + bundled extension**, with no content hash (`src/main.ts` -> `main.js`). Two sources that want the same name are a **build error naming both**. Never an overwrite, and never an invented suffix.
+- **Nothing is written when the pass has errors.** `buildOnce` returns before it writes the HTML or any asset. A new shell therefore never points at a bundle that was not emitted, and in watch mode the previous good output stays.
+- **esbuild is given the `outfile`**, and *every* `outputFiles` entry is written. An entry that imports CSS makes esbuild emit a companion `.css`, which lands beside the JS only if esbuild knows the real path.
+- `assetPath` is the URL prefix verbatim. Minus a leading `/` or `./`, it is the subdirectory under the HTML's out dir. A `..` in it is a config error, caught by `loadConfig`, not something to sanitize.
 
 Covered by `tests/html-referenced.dats`, not a CI shell step.
 
 ### Interceptor template lookup
 
-`build-html.ts` resolves the interceptor template via two candidate paths so
-both running modes work:
+`build-html.ts` resolves the interceptor template via two candidate paths so both running modes work:
 
-- `<__dirname>/../runtime/fetch-interceptor.js` &mdash; running from source
-    (e.g. `node --experimental-strip-types src/cli.ts build`).
-- `<__dirname>/../src/runtime/fetch-interceptor.js` &mdash; running from the
-    bundled `dist/ts0`.
+- `<__dirname>/../runtime/fetch-interceptor.js` -- running from source (e.g. `node --experimental-strip-types src/cli.ts build`).
+- `<__dirname>/../src/runtime/fetch-interceptor.js` -- running from the bundled `dist/ts0`.
 
-`package.json`'s `"files"` ships both `dist/ts0` and
-`src/runtime/fetch-interceptor.js` so installs from a published tarball or
-git URL find the template.
+`package.json`'s `"files"` ships both `dist/ts0` and `src/runtime/fetch-interceptor.js` so installs from a published tarball or git URL find the template.
 
 ## Userscript bundling (iife + globalName + preserveHeader)
 
-`format: "iife"` (plus optional `globalName`) is threaded through
-`baseEsbuildOptions()` like the other formats, so it applies to the default and
-js targets alike. `preserveHeader: true` (single-entry target only) re-prepends
-the entry's leading comment block to the written bundle: esbuild strips
-comments, but a userscript's `==UserScript==` block (or a mandated license
-banner) is load-bearing metadata of the OUTPUT file and must survive
-byte-exactly at the top. Mechanics (`leadingCommentBlock` +
-`preserveHeaderPlugin` in build.ts): an esbuild `onEnd` hook &mdash; covering
-the one-shot build and every watch rebuild, each of which rewrites the file, so
-headers never stack &mdash; reads the entry, extracts the maximal leading run
-of `//` lines (or one `/* … */` block) byte-exactly, and prepends it to the
-output file. The header sits above the bundle's own first line; a leading
-`"use strict";` (esbuild emits one when the consumer project's tsconfig sets
-`alwaysStrict`/`strict`) stays an effective directive because comments never
-break the directive prologue. Node-target outfiles keep their
-`#!/usr/bin/env node` shebang; browser-target outfiles get none (a shebang is
-a Node convenience and would corrupt a userscript header).
+`format: "iife"`, plus the optional `globalName`, is threaded through `baseEsbuildOptions()` like the other formats. It therefore applies to the default and js targets alike. `preserveHeader: true`, on the single-entry target only, re-prepends the entry's leading comment block to the written bundle. esbuild strips comments. But a userscript's `==UserScript==` block, or a mandated license banner, is load-bearing metadata of the OUTPUT file. It must survive byte-exactly at the top. The mechanics are `leadingCommentBlock` plus `preserveHeaderPlugin` in build.ts. An esbuild `onEnd` hook reads the entry and extracts the maximal leading run of `//` lines, or one `/* … */` block, byte-exactly. It then prepends that to the output file. The hook covers the one-shot build and every watch rebuild. Each of those rewrites the file, so headers never stack. The header sits above the bundle's own first line. A leading `"use strict";` stays an effective directive. Comments never break the directive prologue. esbuild emits that directive when the consumer project's tsconfig sets `alwaysStrict` or `strict`. A Node-target outfile keeps its `#!/usr/bin/env node` shebang. A browser-target outfile gets none, because a shebang is a Node convenience and corrupts a userscript header.
 
 ## js (library) target
 
-When `entry` resolves to a **directory** (not a `.ts`/`.html` file), `build.ts`
-delegates to `commands/build-js.ts` (`isJsTarget` does the directory check;
-checked after `isHtmlEntry`). This target compiles every `*.ts`/`*.tsx`/`*.mts`/
-`*.cts` under the directory as a separate esbuild entry point, with
-`outbase` = the entry dir and `outdir` = `dist`, so the source tree is mirrored
-(`src/webgpu/sky.ts` → `dist/webgpu/sky.js`). `*.d.ts` and `*.test.*`/`*.spec.*`
-are skipped.
+When `entry` resolves to a **directory**, and not to a `.ts` or `.html` file, `build.ts` delegates to `commands/build-js.ts`. `isJsTarget` does that directory check, after `isHtmlEntry`. This target compiles every `*.ts`, `*.tsx`, `*.mts` and `*.cts` file under the directory as a separate esbuild entry point. `outbase` is the entry dir and `outdir` is `dist`. The source tree is therefore mirrored (`src/webgpu/sky.ts` -> `dist/webgpu/sky.js`). `*.d.ts`, `*.test.*` and `*.spec.*` are skipped.
 
-Code shared across entries is **deduplicated**, not duplicated: `splitting: true`
-(enabled for `esm` output) makes esbuild emit a module imported by 2+ entries
-once into a chunk and import it, rather than inlining a copy into every output.
-A consumer still imports a single entry file — the browser fetches any shared
-chunk transitively. Non-shared local imports and loader-backed imports (`.wgsl`
-text, etc.) stay inlined. `"bundleShared": false` turns splitting off to force
-self-contained (duplicating) outputs — a first-class option, NOT the `esbuild`
-escape hatch, which is slated for removal along with esbuild itself. Splitting is
-only expressible for `esm`, so other formats duplicate regardless.
+Code shared across entries is **deduplicated**, not duplicated. `splitting: true` is enabled for `esm` output. A module imported by two or more entries is then emitted once into a chunk and imported, rather than inlined into every output. A consumer still imports a single entry file, and the browser fetches any shared chunk transitively. A non-shared local import stays inlined, as does a loader-backed import such as `.wgsl` text. `"bundleShared": false` turns splitting off, to force self-contained outputs that duplicate. It is a first-class option, NOT the `esbuild` escape hatch, which is slated for removal along with esbuild itself. Splitting is only expressible for `esm`, so every other format duplicates regardless.
 
-It is mutually exclusive with the HTML target and the default single-entry
-target. `outfile` is ignored (always `outdir`), and `ts0 run` rejects it (no
-single entry to run). The non-output esbuild options (platform, format, jsx, …)
-come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`, shared with the
-default target so the two can't drift.
+It is mutually exclusive with the HTML target and the default single-entry target. `outfile` is ignored, because output always goes to `outdir`. `ts0 run` rejects it, because there is no single entry to run. The non-output esbuild options, such as platform, format and jsx, come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`. The default target shares that function. The two therefore cannot drift.
+
+## Dependency bundling (`bundleDependencies`)
+
+A node-target build leaves an imported package as a `require("pkg")` call, through esbuild's `packages: "external"`. That is right for a CLI installed alongside its node_modules. `"bundleDependencies": true` compiles those packages in instead, for an artifact that must run where its node_modules does not exist. One example is a GitHub Action, whose release tag ships `dist/` and nothing else. It is threaded through `baseEsbuildOptions`, so `external` still wins per specifier. A native addon or a peer dependency opts back out that way.
+
+The default stays external. ts0 builds ITSELF with the node target and resolves `typescript` at run time through `createRequire`. Bundling its dependencies breaks that, and tries to compile esbuild's native module in.
 
 ## External imports (`external`)
 
-`external` lists import specifiers that stay **references** in the output: the
-import statement is emitted verbatim and the target's contents are never pulled
-in. It is threaded through `baseEsbuildOptions()`, so the single-entry and js
-targets both honor it — "this import is resolved at runtime" is a property of
-the code, not of which target compiles it.
+`external` lists import specifiers that stay **references** in the output. The import statement is emitted verbatim, and the target's contents are never pulled in. It is threaded through `baseEsbuildOptions()`, so the single-entry and js targets both honor it. "This import is resolved at runtime" is a property of the code, not of which target compiles it.
 
-The motivating case is a CSS module script
-(`import s from "./x.css" with { type: "css" }`), which the browser resolves and
-constructs itself; also peer dependencies a library must not embed, and import-map
-entries.
+The motivating case is a CSS module script, `import s from "./x.css" with { type: "css" }`, which the browser resolves and constructs itself. Two more are a peer dependency a library must not embed, and an import-map entry.
 
-- **It is ts0 vocabulary, not an esbuild passthrough.** The `esbuild` escape
-    hatch and esbuild itself are slated for removal; `external` is defined in
-    terms of import specifiers and must survive a bundler swap. Do not
-    reintroduce it as a raw passthrough or document it in esbuild's terms.
-- **It must never become a way to silence an unsupported import.** An import
-    the bundler cannot handle and that is NOT listed in `external` has to keep
-    failing the build, with nothing written. That hard failure is the whole
-    guardrail: silent inlining would put stylesheet text into the JS and defeat
-    the feature. `tests/samples.dats` carries "an unsupported CSS-type import
-    errors instead of silently inlining" specifically to keep this honest — if
-    that test ever starts passing, the guardrail is gone.
-- Matching is by specifier as written (`"./styles.css"`, `"lit"`, `"*.css"`
-    with `*` matching any run of characters), never by resolved file path.
-- External imports are still type-checked; the sample pairs one with an ambient
-    `declare module "*.css"`.
+- **It is ts0 vocabulary, not an esbuild passthrough.** The `esbuild` escape hatch and esbuild itself are slated for removal. `external` is defined in terms of import specifiers, and must survive a bundler swap. Do not reintroduce it as a raw passthrough, and do not document it in esbuild's terms.
+- **It must never become a way to silence an unsupported import.** An import the bundler cannot handle must keep failing the build with nothing written, unless `external` lists it. That hard failure is the whole guardrail. Silent inlining puts stylesheet text into the JS and defeats the feature. `tests/samples.dats` carries "an unsupported CSS-type import errors instead of silently inlining" to keep this honest. If that test ever starts passing, the guardrail is gone.
+- Matching is by specifier as written, never by resolved file path: `"./styles.css"`, `"lit"`, or `"*.css"` with `*` matching any run of characters.
+- An external import is still type-checked. The sample pairs one with an ambient `declare module "*.css"`.
 
-Type-checking for this target uses `moduleResolution: "Bundler"` (see
-"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text), set
-the loader with the `loaders` config field (`{ ".wgsl": "text" }`, threaded into
-esbuild by `baseEsbuildOptions`) and provide an ambient `declare module "*.wgsl"`
-so the import also type-checks; esbuild does the actual inlining. ts0 applies no
-loaders by default. (The `esbuild.loader` escape hatch still works and overrides
-`loaders`.)
+Type-checking for this target uses `moduleResolution: "Bundler"`. See "Type-checking" above. For a loader-backed import, such as `.wgsl` as text, set the loader with the `loaders` config field, `{ ".wgsl": "text" }`, which `baseEsbuildOptions` threads into esbuild. Provide an ambient `declare module "*.wgsl"` so the import also type-checks. esbuild does the actual inlining. ts0 applies no loaders by default. The `esbuild.loader` escape hatch still works, and overrides `loaders`.
 
 ### Declaration emit (js target only)
 
-Unless `"declarations": false`, the js target emits a parallel `*.d.ts` tree
-into outdir next to the `*.js` outputs (`src/ui/x.ts` → `dist/ui/x.js` +
-`dist/ui/x.d.ts`), so a deployed library ships types at the same URLs as its
-code. Mechanics (see `emitDeclarations` in build.ts and `declarationsPlugin`
-in build-js.ts):
+Unless `"declarations": false`, the js target emits a parallel `*.d.ts` tree into outdir, beside the `*.js` outputs (`src/ui/x.ts` -> `dist/ui/x.js` plus `dist/ui/x.d.ts`). A deployed library therefore ships types at the same URLs as its code. For the mechanics, see `emitDeclarations` in build.ts and `declarationsPlugin` in build-js.ts:
 
-- It is a second tsc pass (`declaration` + `emitDeclarationOnly` +
-    `noEmitOnError`, `outDir` = the build outdir, `rootDir` = the entry dir)
-    over **exactly the entry-point set esbuild compiled** plus the project's
-    ambient `*.d.ts` files (`collectAmbientDeclarations` &mdash; needed so
-    loader-backed imports resolve; ambient inputs emit nothing and are exempt
-    from `rootDir`). Consequences: test files and esbuild's `chunk-*.js` never
-    get a `.d.ts`, and `*.d.ts` sources aren't copied.
-- It runs in an esbuild `onEnd` hook, one-shot AND watch, only after a
-    successful build; an emit failure fails the build. `noEmitOnError` makes
-    it all-or-nothing &mdash; no partial `.d.ts` tree can ever land. `ts0 run`
-    / `ts0 test` never invoke it (they must not write output).
-- Emitted declarations **keep source specifiers**, including explicit
-    `.ts`/`.tsx` extensions &mdash; that is the standard shape for
-    `allowImportingTsExtensions` projects. Consumers resolve `./x.ts` inside a
-    `.d.ts` via extension substitution (`.ts` → `.tsx` → `.d.ts`) to the
-    deployed sibling `x.d.ts`; verified under both bundler and NodeNext
-    consumer resolution. Do NOT add `rewriteRelativeImportExtensions`: it
-    rewrites JavaScript emit only (never declarations) and is unnecessary.
-- Output is deterministic (same input → byte-identical `.d.ts`); CI asserts
-    this, because consumers commit fetched copies and diff them.
-- Known constraint: an entry importing a source file **outside the entry
-    directory** fails the pass with TS6059 (a mirrored tree can't represent
-    it), loudly and with nothing written. The opt-out is
-    `"declarations": false`.
+- It is a second tsc pass, with `declaration`, `emitDeclarationOnly` and `noEmitOnError`, `outDir` set to the build outdir and `rootDir` set to the entry dir. It covers **exactly the entry-point set esbuild compiled**, plus the project's ambient `*.d.ts` files. `collectAmbientDeclarations` gathers those, so a loader-backed import resolves. An ambient input emits nothing and is exempt from `rootDir`. Two consequences follow. A test file and esbuild's `chunk-*.js` never get a `.d.ts`, and a `*.d.ts` source is not copied.
+- It runs in an esbuild `onEnd` hook, one-shot AND watch, only after a successful build. An emit failure fails the build. `noEmitOnError` makes it all-or-nothing, so no partial `.d.ts` tree can land. `ts0 run` and `ts0 test` never invoke it, because they must not write output.
+- Emitted declarations **keep source specifiers**, explicit `.ts` and `.tsx` extensions included. That is the standard shape for an `allowImportingTsExtensions` project. A consumer resolves `./x.ts` inside a `.d.ts` by extension substitution (`.ts` -> `.tsx` -> `.d.ts`) to the deployed sibling `x.d.ts`. This was verified under both bundler and NodeNext consumer resolution. Do NOT add `rewriteRelativeImportExtensions`. It rewrites JavaScript emit only, never declarations, and is unnecessary.
+- Output is deterministic: one input gives byte-identical `.d.ts`. CI asserts this, because a consumer commits a fetched copy and diffs it.
+- One known constraint. An entry that imports a source file **outside the entry directory** fails the pass with TS6059, loudly and with nothing written. A mirrored tree cannot represent such an import. The opt-out is `"declarations": false`.
 
 ## Distributing
 
 Three consumption paths:
 
-- **`action.yml` (repo root) for GitHub Actions consumers.** `uses:
-    wow-look-at-my/ts0@master`, with no inputs, downloads the prebuilt
-    `ts0.cjs` below and runs `test` then `build` &mdash; see the README's
-    "GitHub Actions" section. It takes **no command input**: a caller choosing
-    the command can choose `--help`, a green check for zero work.
-    `tests/action.dats` asserts both commands still run, in that order, that no
-    `node` line in the action interpolates an expression, and that the input
-    set is exactly working-directory. Keep it that way.
-- **Prebuilt ts0.cjs on buildhost (primary for non-npm consumers).**
-    Machines with stock Node but no npm/node_modules/git &mdash;
-    webhook-runner's `//go:generate` step, CI images, containers &mdash;
-    download one platform-neutral JavaScript file from
-    `https://dl.pazer.build/ts0?...` and run it with `node` (or pipe it:
-    `curl ... | node - build`). See the README's "Prebuilt ts0.cjs" section
-    for URLs and pinning semantics, and "Prebuilt ts0.cjs" below for how it is
-    built. Recommend `?v=N` pins to consumers that need reproducible output.
-- **npm / git installs (for node projects).**
-    `npm install github:wow-look-at-my/bundler`: `package.json` has a `prepare`
-    script that runs `npm run build`; npm runs `prepare` automatically when
-    installing from a git URL, so `dist/ts0` is built on the consumer's machine
-    and `npx ts0 …` works without a separate build step. The `"files"` field is
-    irrelevant for git installs but matters for `npm publish` &mdash; keep
-    `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets
-    consumes ts0 this way; the prebuilt machinery must never change this
-    path's behavior (see the npm-path invariant in docs/prebuilt-ts0-cjs.md).
+- **`action.yml` (repo root) for GitHub Actions consumers.** `uses: wow-look-at-my/ts0@master`, with no inputs, downloads the prebuilt `ts0.cjs` below and runs `test` then `build`. See the README's "GitHub Actions" section. It takes **no command input**. A caller that chooses the command can choose `--help`, a green check for zero work. `tests/action.dats` asserts three things. Both commands still run, in that order. No `node` line in the action interpolates an expression. The input set is exactly working-directory. Keep it that way.
+- **Prebuilt ts0.cjs on buildhost, the primary path for non-npm consumers.** Some machines carry stock Node but no npm, no node_modules and no git: webhook-runner's `//go:generate` step, a CI image, a container. Each downloads one platform-neutral JavaScript file from `https://dl.pazer.build/ts0?...` and runs it with `node`, or pipes it as `curl ... | node - build`. See the README's "Prebuilt ts0.cjs" section for the URLs and the pinning semantics, and "Prebuilt ts0.cjs" below for how it is built. Recommend a `?v=N` pin to a consumer that needs reproducible output.
+- **npm and git installs, for node projects.** `npm install github:wow-look-at-my/bundler` works because `package.json` has a `prepare` script that runs `npm run build`. An install from a git URL runs `prepare` automatically. `dist/ts0` is therefore built on the consumer's machine, and `npx ts0 …` works with no separate build step. The `"files"` field is irrelevant to a git install, but it matters for `npm publish`. Keep `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets consumes ts0 this way. The prebuilt machinery must never change this path's behavior. See the npm-path invariant in docs/prebuilt-ts0-cjs.md.
 
 ## Prebuilt ts0.cjs (buildhost packaging)
 
-`scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral
-CommonJS file plus five small platform-native esbuild binaries; CI publishes them
-on merges to master, and consumers run `node ts0.cjs <cmd>` on stock Node >= 22
-with no npm. CommonJS, `.cjs`, and stdin-runnable are all load-bearing; the
-compiler is embedded exactly once; and nothing in shared code may depend on the
-bundle's own path.
+`scripts/build-prebuilt.ts` packages ts0 for buildhost as ONE platform-neutral CommonJS file plus five small platform-native esbuild binaries. CI publishes them on every branch push. A consumer runs `node ts0.cjs <cmd>` on stock Node >= 22 with no npm. CommonJS, `.cjs` and stdin-runnable are all load-bearing. The compiler is embedded exactly once. Nothing in shared code may depend on the bundle's own path.
 
-- docs/prebuilt-ts0-cjs.md -- the whole contract: bundle contents, the generated
-    `bin/tsc` driver, cache extraction, the esbuild native fetch, the npm-path
-    invariant, what must stay in sync on a dependency bump, and CI/publish.
+- docs/prebuilt-ts0-cjs.md -- the whole contract. It covers the bundle contents, the generated `bin/tsc` driver, cache extraction and the esbuild native fetch. It also covers the npm-path invariant, what must stay in sync on a dependency bump, and CI and publish.
 
 ## Documentation
 
-Per global instructions: when you change project structure, commands, config
-fields, or tooling, update `README.md` and this file in the same commit. Don't
-let the docs drift.
+Per global instructions: when you change project structure, commands, config fields, or tooling, update `README.md` and this file in the same commit. Do not let the docs drift.
 
 ## Git workflow
 
 - Develop on the branch the task specifies.
-- Commit and push frequently; the VM can reset.
-- PRs in this org are squash-merged &mdash; don't rebase or force-push.
+- Commit and push frequently. The VM can reset.
+- PRs in this org are squash-merged. Do not rebase or force-push.
