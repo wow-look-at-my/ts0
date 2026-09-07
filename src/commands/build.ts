@@ -324,7 +324,7 @@ async function runTsc(
 	tempName: string,
 	tsconfigContent: unknown,
 ): Promise<{ success: boolean; output: string }> {
-	const { execSync } = await import("node:child_process");
+	const { execFile } = await import("node:child_process");
 	const { createRequire } = await import("node:module");
 
 	// Find tsc from ts0's dependencies, not the project's
@@ -337,21 +337,22 @@ async function runTsc(
 	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
 
 	try {
-		// Quoted: tscPath/tempTsconfig may live under paths with spaces (a
-		// node_modules under a spaced directory, or the prebuilt ts0.js
-		// cache under e.g. "C:\\Users\\First Last\\.cache").
-		const output = execSync(`node "${tscPath}" --project "${tempTsconfig}"`, {
-			cwd: rootDir,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
+		// execFile, not execSync: this is the one call a whole project's check
+		// waits on, and execSync blocks the event loop, so a caller running
+		// several projects at once got no concurrency at all whatever it did.
+		// Passing argv rather than a command line also drops the quoting
+		// question -- tscPath and tempTsconfig may live under a path with
+		// spaces, such as "C:\\Users\\First Last\\.cache".
+		return await new Promise((resolve) => {
+			// A default 1 MB buffer truncates a large project's diagnostics and
+			// reports the truncation as the failure, which reads as a compiler
+			// crash rather than as the type errors it actually found.
+			const opts = { cwd: rootDir, encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024 };
+			execFile("node", [tscPath, "--project", tempTsconfig], opts, (err, stdout, stderr) => {
+				if (!err) return resolve({ success: true, output: stdout });
+				resolve({ success: false, output: stdout || stderr || String(err) });
+			});
 		});
-		return { success: true, output };
-	} catch (err) {
-		const error = err as { stdout?: string; stderr?: string };
-		return {
-			success: false,
-			output: error.stdout || error.stderr || String(err),
-		};
 	} finally {
 		unlinkSync(tempTsconfig);
 	}
