@@ -30,14 +30,14 @@ tests:
 			# each test file in its own process, so a blocked thread is what a
 			# slow test file looks like to the runner.
 			src/a.test.ts: |
-				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
 				export const done = 1;
 			src/b.test.ts: |
-				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
 				export const done = 1;
 			run.sh: |
 				set -euo pipefail
-				block_ms=1500
+				block_ms=3000
 				root="$(dirname "$1")"
 				cp -r "$(dirname {inputs.ts0.json})/." "$root/"
 				[ -d "$PWD/node_modules" ] && ln -s "$PWD/node_modules" "$root/node_modules"
@@ -62,10 +62,12 @@ tests:
 					echo "FAIL: a forced concurrency of 1 finished in ${serial}ms, under the $(( block_ms * 2 ))ms the two files cost back to back" | tee -a "$1"
 					exit 1
 				fi
-				# The default run pays for one file plus startup. A whole
-				# block_ms of daylight cannot be reached by two files run in
-				# sequence.
-				if [ "$parallel" -ge $(( serial - block_ms + 300 )) ]; then
+				# Both runs pay the same tsc, esbuild and node startup, and that
+				# cost varies by a few hundred milliseconds between two runs on a
+				# loaded runner. So the bar is HALF a block: overlapping saves a
+				# whole one, running in sequence saves nothing, and the gap
+				# between those two answers is far wider than the noise.
+				if [ "$parallel" -ge $(( serial - block_ms / 2 )) ]; then
 					echo "FAIL: the default run took ${parallel}ms against ${serial}ms serial -- the files still ran one after the other" | tee -a "$1"
 					exit 1
 				fi
@@ -130,7 +132,8 @@ tests:
 					echo "FAIL: a forced concurrency of 1 finished in ${serial}ms, under the $(( block_ms * 2 ))ms the two projects cost back to back" | tee -a "$1"
 					exit 1
 				fi
-				if [ "$parallel" -ge $(( serial - block_ms + 300 )) ]; then
+				# Half a block, for the same reason as the case above.
+				if [ "$parallel" -ge $(( serial - block_ms / 2 )) ]; then
 					echo "FAIL: the default run took ${parallel}ms against ${serial}ms serial -- the projects still ran one after the other" | tee -a "$1"
 					exit 1
 				fi
