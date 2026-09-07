@@ -139,6 +139,8 @@ jobs:
       checks: read
       artifact-metadata: write
       deployments: write
+      # The site publish posts the preview URL on the pull request.
+      pull-requests: write
     steps:
       - uses: wow-look-at-my/actions@cache-download#latest
         with:
