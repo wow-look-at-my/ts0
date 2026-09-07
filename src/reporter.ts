@@ -193,10 +193,18 @@ export function colorizeTestLine(line: string): string {
 // complete line with `colorizeLine`. Used to recolor a spawned child's output
 // live: `stdio: "inherit"` hands the fd straight to the terminal, bypassing
 // ts0 entirely, so nothing written that way could ever be recolored.
+// A destination for already-formatted text. `process.stdout` is one. So is an
+// in-memory buffer that holds a nested project's output until it can be
+// printed whole, which is what `ts0 test` uses to run projects at the same
+// time without interleaving two TAP streams.
+export interface LineSink {
+	write(text: string): void;
+}
+
 export function pipeColorized(
 	readable: NodeJS.ReadableStream,
 	colorizeLine: (line: string) => string,
-	out: NodeJS.WritableStream = process.stdout,
+	out: LineSink = process.stdout,
 ): void {
 	let buffer = "";
 	readable.setEncoding("utf-8");

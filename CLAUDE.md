@@ -145,6 +145,8 @@ This is the whole reason the parent's gate may leave those directories out. A ne
 
 `ts0 run` is the one exception, and only because it executes a single entry. It builds its own project (`selfOnly`) and nothing else.
 
+**`ts0 test` runs nested projects at the same time.** Each one writes into its own buffer. It is printed whole the moment it finishes, so no two TAP streams interleave. The order is the order they completed in. The bound is `min(4, availableParallelism())`, well below the per-file `--test-concurrency`. Each project spawns its own tsc AND its own `node --test`. `TS0_PROJECT_CONCURRENCY` overrides it. This needed `runTsc` to stop using `execSync`. That call blocks the event loop, so the recursion got no concurrency at all whatever it did. `tests/concurrency.dats` proves both halves on a wall clock, with a forced concurrency of 1 as the control.
+
 The consequence for this repo: `ts0 build` at the root builds every `samples/*` project, and `ts0 test` runs their tests. A deliberately-broken fixture therefore cannot live in the tree. Stage it inline from a `.dats` test instead.
 
 ### Explicit `any` is banned (unconditionally)

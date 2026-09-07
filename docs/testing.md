@@ -8,7 +8,7 @@ This file documents the WIRING. It says where a test goes and what runs it. It s
 
 A **unit test** is `src/**/*.test.ts`, for logic a caller can invoke directly. One globbed CI step runs them all: `node --experimental-strip-types --test "src/**/*.test.ts"`. A new file needs no edit to the workflow.
 
-Everything else is a **behavioural suite** in `tests/*.dats`, run by [dats](https://github.com/wow-look-at-my/dats). A test that spawns the CLI and asserts on its output belongs here, whatever the file extension says. `src/commands/test-discovery.test.ts` spawns `ts0 build` and `ts0 test` over temp projects. It is a dats suite wearing a `.test.ts` name.
+Everything else is a **behavioural suite** in `tests/*.dats`, run by [dats](https://github.com/wow-look-at-my/dats). A test that spawns the CLI and asserts on its output belongs here, whatever the file extension says. `src/commands/test-discovery.test.ts` was one wearing a `.test.ts` name. Its cases live in `tests/gate.dats` now, beside the nested-project recursion they were half a copy of. Each of them paid a cold tsc start inside a `node --test` process, which is most of what a unit-test step is meant not to cost.
 
 Every suite stages its project into its own directory. It then asserts what the build WROTE, through declarative `outputs.files` match and notMatch checks. Shell covers only a property that spans files. A staged project gets the repo's `node_modules` symlinked in. That is where it resolves `@types/node` and `preact`.
 

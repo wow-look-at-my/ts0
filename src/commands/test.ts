@@ -7,7 +7,70 @@ import { availableParallelism } from "node:os";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
-import { colors, colorizeErrorBlock, colorizeTestLine, formatEsbuildDiagnostic, pipeColorized } from "../reporter.ts";
+import {
+	colors,
+	colorizeErrorBlock,
+	colorizeTestLine,
+	formatEsbuildDiagnostic,
+	pipeColorized,
+	type LineSink,
+} from "../reporter.ts";
+
+// Where one project's output goes. The root project writes straight through.
+// A nested project writes into a buffer, so several can run at once and each
+// still reads as one uninterrupted log.
+interface Sink {
+	out: LineSink;
+	err: LineSink;
+}
+
+const processSink: Sink = { out: process.stdout, err: process.stderr };
+
+// bufferedSink records what a project writes, in order, across BOTH streams,
+// and replays it on flush. Keeping one ordered list rather than two buffers is
+// what makes an error land where it was written instead of after everything.
+function bufferedSink(): { sink: Sink; flush: () => void } {
+	const chunks: Array<{ err: boolean; text: string }> = [];
+	const collect = (err: boolean): LineSink => ({
+		write(text: string): void {
+			chunks.push({ err, text });
+		},
+	});
+	return {
+		sink: { out: collect(false), err: collect(true) },
+		// Synchronous, so a sibling finishing mid-flush cannot cut into it.
+		flush(): void {
+			for (const c of chunks) (c.err ? process.stderr : process.stdout).write(c.text);
+		},
+	};
+}
+
+// How many nested projects run at once. Each one spawns its own tsc and its
+// own `node --test`, so this is bounded well below the test-file concurrency
+// above: a two-core runner asked for eight parallel type-checks spends its
+// time switching between them. TS0_PROJECT_CONCURRENCY overrides it.
+function projectConcurrency(): number {
+	const override = Number(process.env.TS0_PROJECT_CONCURRENCY);
+	if (Number.isInteger(override) && override > 0) return override;
+	return Math.max(2, Math.min(4, availableParallelism()));
+}
+
+// mapConcurrent runs `work` over `items` with at most `limit` in flight, and
+// keeps each result at its item's index.
+async function mapConcurrent<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		for (;;) {
+			const i = next++;
+			const item = items[i];
+			if (item === undefined) return;
+			results[i] = await work(item);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	return results;
+}
 
 // What a compiled test file is called: the source's name, with its extension
 // replaced by this infix plus `.cjs` or `.mjs`. `scan.test.ts` compiles to
@@ -43,7 +106,7 @@ export interface TestOptions {
 // testProject type-checks ONE project and runs the test files it owns,
 // resolving with an exit code (0 = pass). It never exits the process: the
 // recursive caller needs every project's result, not the first failure's.
-async function testProject(configPath: string | undefined, patternOverride?: string): Promise<number> {
+async function testProject(configPath: string | undefined, patternOverride: string | undefined, io: Sink): Promise<number> {
 	const { config, rootDir } = loadConfig(configPath);
 	const pattern = patternOverride || config.test.pattern;
 
@@ -69,24 +132,24 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 	// them, so without this a test run would execute an invalid program.
 	const check = await runTypecheck(config, rootDir);
 	if (!check.success) {
-		console.error(colors().red("Type-checking failed:"));
-		console.error(colorizeErrorBlock(check.output));
+		io.err.write(`${colors().red("Type-checking failed:")}\n`);
+		io.err.write(`${colorizeErrorBlock(check.output)}\n`);
 		return 1;
 	}
 	for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
 		if (!belongsToAnotherProject(file)) testFiles.push(file);
 	}
 	if (testFiles.length === 0) {
-		console.log(`No test files found matching: ${pattern}`);
+		io.out.write(`No test files found matching: ${pattern}\n`);
 		return 0;
 	}
 
-	console.log(`Found ${testFiles.length} test file(s)\n`);
+	io.out.write(`Found ${testFiles.length} test file(s)\n\n`);
 
 	const compiled = await compileTests(config, rootDir, testFiles);
 	if (!compiled.success) {
-		console.error(colors().red("Compiling tests failed:"));
-		console.error(colorizeErrorBlock(compiled.errors.join("\n")));
+		io.err.write(`${colors().red("Compiling tests failed:")}\n`);
+		io.err.write(`${colorizeErrorBlock(compiled.errors.join("\n"))}\n`);
 		return 1;
 	}
 
@@ -112,8 +175,8 @@ async function testProject(configPath: string | undefined, patternOverride?: str
 		// terminal, bypassing ts0 entirely. The same pass renames each compiled
 		// file back to its source, so the reader never sees a build artifact.
 		const rename = sourceNameRewriter(compiled.files);
-		pipeColorized(child.stdout, (line) => colorizeTestLine(rename(line)));
-		pipeColorized(child.stderr, (line) => colorizeTestLine(rename(line)), process.stderr);
+		pipeColorized(child.stdout, (line) => colorizeTestLine(rename(line)), io.out);
+		pipeColorized(child.stderr, (line) => colorizeTestLine(rename(line)), io.err);
 		return await new Promise<number>((resolve, reject) => {
 			child.on("close", (code) => resolve(code ?? 1));
 			child.on("error", reject);
@@ -272,14 +335,26 @@ function sourceNameRewriter(files: CompiledTest[]): (line: string) => string {
 // Depth is unlimited (each nested run recurses in turn) and every project runs
 // even after one fails, because a suite that stops at the first failure hides
 // the rest. Resolves with the worst exit code seen.
-async function testTree(configPath: string | undefined, patternOverride?: string): Promise<number> {
-	let worst = await testProject(configPath, patternOverride);
+// Nested projects run at the same time, bounded by projectConcurrency. Each
+// writes into its own buffer and is printed whole the moment it finishes, so
+// concurrency costs the reader nothing: no two TAP streams interleave, and the
+// order is the order they completed in. Running them one after another made a
+// tree of eight samples pay eight sequential type-checks.
+async function testTree(configPath: string | undefined, patternOverride: string | undefined, io: Sink): Promise<number> {
+	let worst = await testProject(configPath, patternOverride, io);
 	const { rootDir } = loadConfig(configPath);
-	for (const dir of findNestedProjectDirs(rootDir)) {
-		console.log(`\n${dir}:`);
+	const dirs = findNestedProjectDirs(rootDir);
+	if (dirs.length === 0) return worst;
+	const codes = await mapConcurrent(dirs, projectConcurrency(), async (dir) => {
+		const buffered = bufferedSink();
+		buffered.sink.out.write(`\n${dir}:\n`);
 		// The nested project's own test.pattern applies; only an explicit
 		// --pattern from the command line overrides it.
-		const code = await testTree(join(rootDir, dir, "ts0.json"), patternOverride);
+		const code = await testTree(join(rootDir, dir, "ts0.json"), patternOverride, buffered.sink);
+		buffered.flush();
+		return code;
+	});
+	for (const code of codes) {
 		if (code !== 0) worst = code;
 	}
 	return worst;
@@ -289,7 +364,7 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	const { rootDir } = loadConfig(options.configPath);
 
 	if (!options.watch) {
-		const code = await testTree(options.configPath, options.pattern);
+		const code = await testTree(options.configPath, options.pattern, processSink);
 		if (code !== 0) process.exit(code);
 		return;
 	}
@@ -310,7 +385,7 @@ export async function test(options: TestOptions = {}): Promise<void> {
 	const cycle = async (): Promise<void> => {
 		running = true;
 		try {
-			await testTree(options.configPath, options.pattern);
+			await testTree(options.configPath, options.pattern, processSink);
 		} catch (err) {
 			console.error(err);
 		} finally {
