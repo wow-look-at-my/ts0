@@ -19,8 +19,8 @@ npm install -g ts0
 Some machines carry **stock Node and nothing else**: no npm, no node_modules, no git. For those, ts0 ships as a single platform-neutral JavaScript file on the org buildhost, with the TypeScript compiler inlined. Two ways to run it:
 
 ```sh
-# Pinned + cached (recommended for build wiring, e.g. a go:generate step):
-curl -fL "https://dl.pazer.build/ts0?v=N&os=linux&arch=amd64" -o ts0.cjs
+# Saved to a file (for build wiring, e.g. a go:generate step):
+curl -fL "https://dl.pazer.build/ts0?os=linux&arch=amd64" -o ts0.cjs
 node ts0.cjs build
 
 # Zero-file pipe form (re-downloads each run; fine on a fast/LAN link):
@@ -29,7 +29,7 @@ curl -fsSL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" | node
 
 `ts0.cjs` is the same bytes for every platform. The store addresses artifacts by os and arch, so the URL parameters are required. Any supported pair returns the identical file. Save it with a `.cjs` extension. The bundle is CommonJS, which is what lets the pipe form run with no flags. A `.js` file instead parses as ESM if it lands inside a package that declares `"type": "module"`.
 
-**Version pinning.** `?branch=master` resolves to the latest build of master and moves on every merge. `?v=N`, for example `?v=1`, is an immutable release and never changes. **Pin `?v=N` in anything that needs reproducible output.** Use `?branch=master` only where tracking latest is the point. To find the current N, read the `Location` header of a branch download, which redirects to `...&v=N&...`. `GET https://pazer.build/api/v1/projects/ts0/releases` answers the same question. Downloads are anonymous, because the project is public.
+**Never pin a version.** A URL with no `v` resolves to the newest build of master and moves on every merge. A `?v=N` URL names one release. Once that release is gone, the URL answers 404. slopfix's `pins/download-version` rule rejects `v=` in a dl.pazer.build URL and strips it. Downloads are anonymous, because the project is public.
 
 **The one native piece: esbuild.** Everything else is inlined, but esbuild's compiler is a platform-native binary. On the first run, ts0.cjs downloads the matching binary into `TS0_CACHE_DIR`, or into `~/.cache/ts0/<build-id>/`, atomically and once. That binary is ~11 MB. It is published alongside each release at `https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical to the npm registry's `@esbuild` package. The inlined TypeScript compiler extracts to the same cache. Later runs touch nothing. Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, and windows/amd64.
 
