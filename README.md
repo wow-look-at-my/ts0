@@ -39,7 +39,7 @@ A failed or stalled download is retried every 5 s, and each failure prints the n
 
 ### GitHub Actions
 
-`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
+`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It puts `ts0` on PATH for the steps after it, then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
 
 ```yaml
 - uses: wow-look-at-my/ts0@master
@@ -57,7 +57,6 @@ That is the whole input set. The action always downloads the newest ts0 on the d
 
 Outputs `path`, the full path to the downloaded `ts0.cjs`.
 
-A workflow that runs ts0 itself, for example a build its tests depend on, uses `wow-look-at-my/ts0/setup@master` instead. It downloads the same `ts0.cjs` and puts `ts0` on PATH for the steps after it. It runs nothing. It has the same `path` output.
 
 ## Quick start
 
