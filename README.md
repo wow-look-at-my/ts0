@@ -39,7 +39,7 @@ A failed or stalled download retries every 5 s and prints the network error each
 
 ### GitHub Actions
 
-`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It puts `ts0` on PATH for the steps after it, then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
+`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
 
 ```yaml
 - uses: wow-look-at-my/ts0@master
@@ -56,6 +56,8 @@ A project with several build targets still needs only this one step. An example 
 That is the whole input set. The action always downloads the newest ts0 on the default branch. A build tool is not a pinned dependency, so CI tracks latest and there is nothing to choose.
 
 Outputs `path`, the full path to the downloaded `ts0.cjs`.
+
+A workflow that runs ts0 itself, for example a build its tests depend on, uses `wow-look-at-my/ts0/setup@master` instead. It downloads the same `ts0.cjs` and puts `ts0` on PATH for the steps after it. It runs nothing. It has the same `path` output.
 
 ## Quick start
 

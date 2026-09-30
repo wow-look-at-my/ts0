@@ -46,8 +46,8 @@ tests/                  # dats behavioural suites (all of CI's assertions)
     samples.dats        # every sample under samples/
     html-referenced.dats # the multi-file HTML target
     node-target.dats    # bundleDependencies, and running a test in its own module format
-    action.dats         # action.yml: always test then build, no command input; the PATH launcher
-action/ts0              # launcher action.yml copies onto PATH beside ts0.cjs
+    action.dats         # action.yml: always test then build, no command input; the setup/ launcher
+setup/                  # wow-look-at-my/ts0/setup: puts ts0 on PATH (launcher `ts0` beside ts0.cjs), runs nothing
 .github/workflows/ci.yml
 ts0.json                # ts0 builds itself with these settings
 ```

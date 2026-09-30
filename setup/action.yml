@@ -1,0 +1,28 @@
+name: Set up ts0
+description: Put ts0 on PATH for the steps after it, for a workflow that runs ts0 itself, such as a build that its tests depend on
+
+# It runs nothing, so there is no command to choose and nothing to report green for no work.
+outputs:
+  path:
+    description: 'Full path to the downloaded ts0.cjs'
+    value: ${{ steps.download.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download ts0
+      id: download
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      with:
+        project: ts0
+
+    - name: Put ts0 on PATH
+      shell: bash
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: |
+        dir="$RUNNER_TEMP/ts0-bin"
+        mkdir -p "$dir"
+        cp "$TS0" "$dir/ts0.cjs"
+        cp "$GITHUB_ACTION_PATH/ts0" "$dir/ts0"
+        echo "$dir" >> "$GITHUB_PATH"
