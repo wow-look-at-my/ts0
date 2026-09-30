@@ -115,6 +115,50 @@ export async function ensureEsbuildBinary(assets: PrebuiltAssets, cacheDir: stri
 	process.env.ESBUILD_BINARY_PATH = bin;
 }
 
+/** How long a transfer may go without a byte before the attempt is abandoned. */
+const STALL_MS = 30_000;
+const RETRY_MS = 5_000;
+const ATTEMPTS = 5;
+
+export class HttpError extends Error {
+	readonly status: number;
+	constructor(status: number) {
+		super(`HTTP ${status}`);
+		this.status = status;
+	}
+}
+
+// fetch's own message is "fetch failed"; the network error that explains it rides in `cause`.
+export function describe(err: unknown): string {
+	if (!(err instanceof Error)) return String(err);
+	const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
+	return `${err.message}${cause}`;
+}
+
+/** Fetch url and return the whole body. It rejects when no byte arrives for stallMs, before the headers or during the body. */
+export async function fetchBody(url: string, stallMs: number): Promise<Buffer> {
+	const controller = new AbortController();
+	const stalled = () => controller.abort(new Error(`no bytes for ${stallMs / 1000}s`));
+	let timer = setTimeout(stalled, stallMs);
+	try {
+		const resp = await fetch(url, { redirect: "follow", signal: controller.signal });
+		if (!resp.ok) throw new HttpError(resp.status);
+		if (!resp.body) throw new Error("response has no body");
+		const chunks: Buffer[] = [];
+		const reader = resp.body.getReader();
+		for (;;) {
+			clearTimeout(timer);
+			timer = setTimeout(stalled, stallMs);
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(Buffer.from(value));
+		}
+		return Buffer.concat(chunks);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 async function downloadEsbuild(assets: PrebuiltAssets, bin: string): Promise<void> {
 	const { os, arch } = platformKeys();
 	const url = process.env.TS0_ESBUILD_URL || `${assets.esbuildDlBase}?os=${os}&arch=${arch}`;
@@ -128,14 +172,18 @@ async function downloadEsbuild(assets: PrebuiltAssets, bin: string): Promise<voi
 				`for ${os}/${arch}, or place the binary at the destination path yourself.`,
 		);
 
-	let resp: Response;
-	try {
-		resp = await fetch(url, { redirect: "follow" });
-	} catch (err) {
-		throw fail(err instanceof Error ? err.message : String(err));
+	// A 4xx is a wrong URL and fails at once. Anything else gets ATTEMPTS tries, so an unreachable host still ends in the error below.
+	let bytes: Buffer | undefined;
+	for (let attempt = 1; bytes === undefined; attempt++) {
+		try {
+			bytes = await fetchBody(url, STALL_MS);
+		} catch (err) {
+			const permanent = err instanceof HttpError && err.status >= 400 && err.status < 500;
+			if (permanent || attempt === ATTEMPTS) throw fail(describe(err));
+			process.stderr.write(`ts0: esbuild download attempt ${attempt} of ${ATTEMPTS} failed (${describe(err)}); retrying in ${RETRY_MS / 1000}s\n`);
+			await new Promise((r) => setTimeout(r, RETRY_MS));
+		}
 	}
-	if (!resp.ok) throw fail(`HTTP ${resp.status}`);
-	const bytes = Buffer.from(await resp.arrayBuffer());
 
 	mkdirSync(dirname(bin), { recursive: true });
 	const tmp = `${bin}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
