@@ -33,13 +33,13 @@ curl -fsSL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" | node
 
 **The one native piece: esbuild.** Everything else is inlined, but esbuild's compiler is a platform-native binary. On the first run, ts0.cjs downloads the matching binary into `TS0_CACHE_DIR`, or into `~/.cache/ts0/<build-id>/`, atomically and once. That binary is ~11 MB. It is published alongside each release at `https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical to the npm registry's `@esbuild` package. The inlined TypeScript compiler extracts to the same cache. Later runs touch nothing. Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, and windows/amd64.
 
-If the download target is unreachable, ts0 fails with a message naming the URL and the destination path -- there is no silent fallback. For firewalled or air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild version, or place the binary at the named destination yourself.
+A failed or stalled download retries every 5 s and prints the network error each time. An attempt that receives no byte for 30 s is abandoned, however large the file. A 4xx answer fails at once with a message naming the URL and the destination path -- there is no silent fallback. For firewalled or air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild version, or place the binary at the named destination yourself.
 
 **Scope.** The file bundles the *toolchain*, not your project's dependencies. A project that imports npm packages still needs its own `node_modules`, installed however you like. That includes `@types/node` for Node-target globals. A browser-target project and a dependency-free project each build with `ts0.cjs` alone.
 
 ### GitHub Actions
 
-`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
+`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It puts `ts0` on PATH for the steps after it, then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
 
 ```yaml
 - uses: wow-look-at-my/ts0@master

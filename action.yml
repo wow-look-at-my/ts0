@@ -23,6 +23,18 @@ runs:
       with:
         project: ts0
 
+    # Later steps run `ts0` by name, so a caller never installs it by hand.
+    - name: Put ts0 on PATH
+      shell: bash
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: |
+        dir="$RUNNER_TEMP/ts0-bin"
+        mkdir -p "$dir"
+        cp "$TS0" "$dir/ts0.cjs"
+        cp "$GITHUB_ACTION_PATH/action/ts0" "$dir/ts0"
+        echo "$dir" >> "$GITHUB_PATH"
+
     # `test` type-checks before it discovers a file, so this gates a project with no tests.
     - name: ts0 test
       shell: bash

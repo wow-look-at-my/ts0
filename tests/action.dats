@@ -55,3 +55,17 @@ tests:
 	  outputs:
 		stdout:
 			- "action OK: always test then build, no command input"
+
+	- desc: "the launcher the action puts on PATH runs the ts0.cjs beside it, with every argument"
+	  cmd: bash {inputs.run.sh}
+	  inputs:
+		files:
+			run.sh: |
+				set -euo pipefail
+				dir="$(mktemp -d)"
+				cp "$PWD/action/ts0" "$dir/ts0"
+				printf 'console.log("ran", JSON.stringify(process.argv.slice(2)));\n' > "$dir/ts0.cjs"
+				PATH="$dir:$PATH" ts0 build "an arg"
+	  outputs:
+		stdout:
+			- 'ran ["build","an arg"]'
