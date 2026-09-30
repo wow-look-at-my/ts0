@@ -118,6 +118,7 @@ export async function ensureEsbuildBinary(assets: PrebuiltAssets, cacheDir: stri
 /** How long a transfer may go without a byte before the attempt is abandoned. */
 const STALL_MS = 30_000;
 const RETRY_MS = 5_000;
+const ATTEMPTS = 5;
 
 export class HttpError extends Error {
 	readonly status: number;
@@ -171,15 +172,15 @@ async function downloadEsbuild(assets: PrebuiltAssets, bin: string): Promise<voi
 				`for ${os}/${arch}, or place the binary at the destination path yourself.`,
 		);
 
-	// A 4xx is a wrong URL and fails at once. Anything else retries on a fixed cadence until it lands.
-	let bytes: Buffer;
-	for (let attempt = 1; ; attempt++) {
+	// A 4xx is a wrong URL and fails at once. Anything else gets ATTEMPTS tries, so an unreachable host still ends in the error below.
+	let bytes: Buffer | undefined;
+	for (let attempt = 1; bytes === undefined; attempt++) {
 		try {
 			bytes = await fetchBody(url, STALL_MS);
-			break;
 		} catch (err) {
-			if (err instanceof HttpError && err.status >= 400 && err.status < 500) throw fail(err.message);
-			process.stderr.write(`ts0: esbuild download attempt ${attempt} failed (${describe(err)}); retrying in ${RETRY_MS / 1000}s\n  url: ${url}\n`);
+			const permanent = err instanceof HttpError && err.status >= 400 && err.status < 500;
+			if (permanent || attempt === ATTEMPTS) throw fail(describe(err));
+			process.stderr.write(`ts0: esbuild download attempt ${attempt} of ${ATTEMPTS} failed (${describe(err)}); retrying in ${RETRY_MS / 1000}s\n`);
 			await new Promise((r) => setTimeout(r, RETRY_MS));
 		}
 	}
