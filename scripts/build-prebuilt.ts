@@ -28,7 +28,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -188,11 +188,107 @@ function embeddedFiles(): Record<string, string> {
 		(rel) => rel === "package.json" || rel.endsWith(".d.ts"),
 	);
 	if (nodeTypesFiles.length === 0) throw new Error("no .d.ts found in @types/node");
+	const nodeTypesSources: string[] = [];
 	for (const rel of nodeTypesFiles) {
-		put(`node_modules/@types/node/${rel.split(sep).join("/")}`, join(nodeTypesDir, rel));
+		const key = `node_modules/@types/node/${rel.split(sep).join("/")}`;
+		put(key, join(nodeTypesDir, rel));
+		if (rel.endsWith(".d.ts")) nodeTypesSources.push(files[key]);
 	}
+	embedTypeDependencies(files, put, nodeTypesSources);
 
 	return files;
+}
+
+// embedTypeDependencies stages the packages the embedded declarations import
+// from, and every package those import from in turn.
+//
+// @types/node does not declare the whole platform itself. It imports
+// `undici-types` for fetch, and that is where Response, Request and Headers
+// live. Embedding @types/node without it leaves a `Response` with no members:
+// `(await fetch(url)).ok` becomes "Property 'ok' does not exist on type
+// 'Response'", in a project whose only fault is trusting the @types/node ts0
+// ships. tsc reports nothing about the missing package, because an unresolved
+// type import degrades to a shapeless type rather than an error.
+//
+// The closure is walked rather than listed, so a dependency added on the next
+// version bump is embedded too. A package that cannot be resolved fails the
+// packaging here, where the message can say what is missing, instead of
+// surfacing as a type error in somebody else's repository.
+function embedTypeDependencies(
+	files: Record<string, string>,
+	put: (key: string, from: string) => void,
+	seedSources: string[],
+): void {
+	const embedded = new Set<string>();
+	const pending = packagesImportedBy(seedSources);
+
+	while (pending.size > 0) {
+		const name = [...pending][0];
+		pending.delete(name);
+		if (embedded.has(name)) continue;
+		embedded.add(name);
+
+		let pkgDir: string;
+		try {
+			pkgDir = dirname(requireLocal.resolve(`${name}/package.json`));
+		} catch {
+			throw new Error(
+				`the embedded declarations import "${name}", which is not installed. ` +
+					`ts0 would ship types that reference a package no consumer has, and tsc reports that as ` +
+					`missing members rather than a missing module. Add it to ts0's dependencies.`,
+			);
+		}
+
+		const staged: string[] = [];
+		for (const rel of readdirSync(pkgDir, { recursive: true }) as string[]) {
+			if (rel !== "package.json" && !rel.endsWith(".d.ts")) continue;
+			const key = `node_modules/${name}/${rel.split(sep).join("/")}`;
+			put(key, join(pkgDir, rel));
+			if (rel.endsWith(".d.ts")) staged.push(files[key]);
+		}
+		if (staged.length === 0) throw new Error(`no .d.ts found in ${name}`);
+		for (const next of packagesImportedBy(staged)) pending.add(next);
+	}
+}
+
+// withoutComments removes block and line comments from declaration text. A
+// line comment must open at whitespace or the start of a line, so the `//` in
+// a "https://..." string keeps its rest of the line.
+function withoutComments(source: string): string {
+	return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|\s)\/\/[^\n]*/g, "$1");
+}
+
+// packagesImportedBy returns the bare package specifiers the given DECLARATION
+// sources import, with Node's own builtins left out. A subpath import is
+// reduced to the package that owns it, and a `<reference types="x" />` names
+// the `@types/x` package that declaration lookup resolves it to.
+//
+// Hand only .d.ts text to this. JavaScript carries `import("...")` calls with
+// runtime arguments, and reading those as package names asks for a package
+// nobody ever depended on.
+function packagesImportedBy(sources: string[]): Set<string> {
+	const names = new Set<string>();
+	const add = (specifier: string): void => {
+		if (specifier.startsWith(".") || specifier.startsWith("/")) return;
+		const parts = specifier.split("/");
+		const name = specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+		// Both spellings, because a module reachable only as `node:sqlite` or
+		// `node:sea` is still a builtin when @types/node writes it bare.
+		if (isBuiltin(name) || isBuiltin(`node:${name}`)) return;
+		names.add(name);
+	};
+	for (const source of sources) {
+		// A `<reference types=...>` is itself a comment, so it is read before
+		// the comments come out.
+		for (const match of source.matchAll(/<reference\s+types\s*=\s*["']([^"']+)["']/g)) add(`@types/${match[1]}`);
+		// @types/node's documentation shows imports that no consumer resolves
+		// -- `import('napi_addon.node')` in an @example block. Reading those as
+		// dependencies would fail the packaging over a code sample.
+		const code = withoutComments(source);
+		for (const match of code.matchAll(/\bfrom\s*["']([^"']+)["']/g)) add(match[1]);
+		for (const match of code.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) add(match[1]);
+	}
+	return names;
 }
 
 async function bundle(assetsModuleSource: string): Promise<string> {

@@ -131,6 +131,23 @@ export interface Ts0Config {
 	// cannot handle and that is not listed here still fails the build.
 	external?: string[];
 
+	// Whether imports of installed packages are compiled INTO the output
+	// (default false on the node target, always true on browser). A node bundle
+	// leaves them as `require("pkg")`/`import ... from "pkg"` calls that Node
+	// resolves from node_modules at run time, which is what a CLI installed
+	// alongside its dependencies wants.
+	//
+	// Set true when the output file has to run somewhere its node_modules does
+	// not exist -- a GitHub Action, whose release tag ships dist/ and nothing
+	// else; a script copied onto a machine on its own. Every package the entry
+	// reaches is then compiled into the one output file. A specifier listed in
+	// `external` stays a reference even so, which is how a package that must not
+	// be embedded (a native addon, a peer dependency) opts back out.
+	//
+	// Browser code has no run-time module resolver to leave the work to, so the
+	// browser target ignores this field and always bundles.
+	bundleDependencies?: boolean;
+
 	// Whether code shared by more than one output module may be factored into a
 	// shared chunk that the outputs import (default true). Only the js (library)
 	// target emits more than one module, so only it is affected; the
@@ -247,6 +264,10 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 
 	if (config.bundleShared !== undefined && typeof config.bundleShared !== "boolean") {
 		throw new Error("ts0: bundleShared must be a boolean");
+	}
+
+	if (config.bundleDependencies !== undefined && typeof config.bundleDependencies !== "boolean") {
+		throw new Error("ts0: bundleDependencies must be a boolean");
 	}
 
 	// Auto-detect entry if not specified
