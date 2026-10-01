@@ -1,0 +1,217 @@
+name: C++ CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/cpp-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/cpp-ci.yml'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+
+      - name: Configure CMake
+        working-directory: cpp
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        working-directory: cpp
+        run: cmake --build build -j$(nproc)
+
+      - name: Verify static linking
+        working-directory: cpp/build
+        run: |
+          echo "Binary info:"
+          file ts0
+          echo ""
+          echo "Size:"
+          ls -lh ts0
+          echo ""
+          echo "Dependencies (should say 'not a dynamic executable'):"
+          ldd ts0 || true
+
+      - name: Test --help
+        working-directory: cpp/build
+        run: ./ts0 --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts0-cpp-linux-x64
+          path: cpp/build/ts0
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        working-directory: cpp
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        working-directory: cpp
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Show binary info
+        working-directory: cpp/build
+        run: |
+          echo "Binary info:"
+          file ts0
+          echo ""
+          echo "Size:"
+          ls -lh ts0
+          echo ""
+          echo "Dependencies:"
+          otool -L ts0
+
+      - name: Test --help
+        working-directory: cpp/build
+        run: ./ts0 --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts0-cpp-macos-x64
+          path: cpp/build/ts0
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        working-directory: cpp
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        working-directory: cpp
+        run: cmake --build build --config Release
+
+      - name: Show binary info
+        working-directory: cpp/build/Release
+        run: |
+          echo "Size:"
+          dir ts0.exe
+
+      - name: Test --help
+        working-directory: cpp/build/Release
+        run: ./ts0.exe --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts0-cpp-windows-x64
+          path: cpp/build/Release/ts0.exe
+
+  test-alpine:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: apk add --no-cache nodejs npm
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ts0-cpp-linux-x64
+          path: /usr/local/bin
+
+      - name: Make executable
+        run: chmod +x /usr/local/bin/ts0
+
+      - name: Test --help in Alpine
+        run: ts0 --help
+
+      - name: Test init command
+        run: |
+          mkdir -p /tmp/test-project
+          cd /tmp/test-project
+          ts0 init
+          cat ts0.json
+
+      - name: Install esbuild for build test
+        working-directory: /tmp/test-project
+        run: |
+          npm init -y
+          npm pkg set type=module
+          npm install esbuild typescript @types/node
+
+      - name: Test build command
+        working-directory: /tmp/test-project
+        run: ts0 build
+
+      - name: Test run command
+        working-directory: /tmp/test-project
+        run: ts0 run
+
+      - name: Test test command
+        working-directory: /tmp/test-project
+        run: ts0 test
+
+  test-debian:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get install -y nodejs
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ts0-cpp-linux-x64
+          path: /usr/local/bin
+
+      - name: Make executable
+        run: chmod +x /usr/local/bin/ts0
+
+      - name: Test --help in Debian
+        run: ts0 --help
+
+      - name: Test init command
+        run: |
+          mkdir -p /tmp/test-project
+          cd /tmp/test-project
+          ts0 init
+
+      - name: Install esbuild for build test
+        working-directory: /tmp/test-project
+        run: |
+          npm init -y
+          npm pkg set type=module
+          npm install esbuild typescript @types/node
+
+      - name: Test build command
+        working-directory: /tmp/test-project
+        run: ts0 build
+
+      - name: Test run command
+        working-directory: /tmp/test-project
+        run: ts0 run
+
+      - name: Test test command
+        working-directory: /tmp/test-project
+        run: ts0 test
