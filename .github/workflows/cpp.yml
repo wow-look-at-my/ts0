@@ -1,0 +1,136 @@
+name: C++ Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/cpp.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/cpp.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Cosmopolitan toolchain
+        run: |
+          cd cpp
+          curl -LO https://cosmo.zip/pub/cosmocc/cosmocc.zip
+          unzip -q cosmocc.zip -d cosmocc
+
+      - name: Build with Cosmopolitan
+        run: |
+          cd cpp
+          mkdir build
+          ./cosmocc/bin/cosmoc++ \
+            -std=c++20 \
+            -Os \
+            -I src \
+            -o build/ts0.com \
+            $(find src -name '*.cpp')
+
+          # Show binary info before any stripping
+          ls -lh build/ts0.com
+          file build/ts0.com
+
+          # APE binaries need special handling - copy before strip attempt
+          cp build/ts0.com build/ts0.com.backup
+
+          # Try cosmopolitan's objcopy for size reduction (safer than strip)
+          ./cosmocc/bin/x86_64-unknown-cosmo-objcopy -S build/ts0.com || true
+
+          # If strip broke it, restore backup
+          if ! ./build/ts0.com --help > /dev/null 2>&1; then
+            echo "Strip broke binary, restoring backup"
+            mv build/ts0.com.backup build/ts0.com
+          else
+            rm -f build/ts0.com.backup
+          fi
+
+      - name: Show binary info
+        run: |
+          ls -lh cpp/build/ts0.com
+          file cpp/build/ts0.com
+          # Test that it actually runs on Linux
+          cpp/build/ts0.com --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts0-cosmopolitan
+          path: cpp/build/ts0.com
+
+  test-linux:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts0-cosmopolitan
+
+      - name: Make executable
+        run: chmod +x ts0.com
+
+      - name: Test help
+        run: ./ts0.com --help
+
+      - name: Test init
+        run: |
+          mkdir test-project
+          cd test-project
+          ../ts0.com init
+          cat ts0.json
+          cat src/main.ts
+
+  test-macos:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts0-cosmopolitan
+
+      - name: Make executable
+        run: chmod +x ts0.com
+
+      - name: Test help
+        run: ./ts0.com --help
+
+      - name: Test init
+        run: |
+          mkdir test-project
+          cd test-project
+          ../ts0.com init
+          cat ts0.json
+          cat src/main.ts
+
+  test-windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ts0-cosmopolitan
+
+      - name: Rename to .exe
+        run: ren ts0.com ts0.exe
+
+      - name: Test help
+        run: .\ts0.exe --help
+
+      - name: Test init
+        run: |
+          mkdir test-project
+          cd test-project
+          ..\ts0.exe init
+          type ts0.json
+          type src\main.ts
