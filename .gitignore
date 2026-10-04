@@ -6,4 +6,6 @@ bin/
 obj/
 .packages/
 .ts0-tsconfig-emit.json
+*.ts0.cjs
+*.ts0.mjs
 build-prebuilt/
