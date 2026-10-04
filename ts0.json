@@ -1,7 +1,0 @@
-{
-	"entry": "src/cli.ts",
-	"outfile": "dist/ts0",
-	"target": "node",
-	"format": "esm",
-	"strict": true
-}

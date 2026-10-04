@@ -2,6 +2,9 @@ node_modules/
 dist/
 *.log
 .ts0-tsconfig.json
+bin/
+obj/
+.packages/
 .ts0-tsconfig-emit.json
 *.ts0.cjs
 *.ts0.mjs
