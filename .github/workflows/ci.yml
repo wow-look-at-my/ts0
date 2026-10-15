@@ -4,9 +4,13 @@ on:
   push:
     branches: ['**']
 
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +35,7 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +85,7 @@ jobs:
   # Packages ts0 for buildhost; the contract is docs/prebuilt-ts0-cjs.md.
   prebuilt:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +97,7 @@ jobs:
       - run: npm ci
 
       - name: Build ts0.cjs + esbuild natives
-        run: npm run build:prebuilt
+        run: node --experimental-strip-types scripts/build-prebuilt.ts
 
       - name: Bare-node smoke (node on PATH, no npm)
         run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
@@ -130,7 +134,7 @@ jobs:
   # Every branch publishes; "latest" still only ever resolves the default branch.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read

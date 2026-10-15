@@ -26,12 +26,10 @@ runs:
     # Later steps, and a build a test starts, run `ts0` by name, so a caller never installs it by hand.
     - name: Put ts0 on PATH
       shell: bash
-      env:
-        TS0: ${{ steps.download.outputs.path }}
       run: |
         dir="$RUNNER_TEMP/ts0-bin"
         mkdir -p "$dir"
-        cp "$TS0" "$dir/ts0.cjs"
+        cp "${{ steps.download.outputs.path }}" "$dir/ts0.cjs"
         cp "$GITHUB_ACTION_PATH/bin/ts0" "$dir/ts0"
         echo "$dir" >> "$GITHUB_PATH"
 
@@ -39,13 +37,9 @@ runs:
     - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        TS0: ${{ steps.download.outputs.path }}
-      run: node "$TS0" test
+      run: node "${{ steps.download.outputs.path }}" test
 
     - name: ts0 build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        TS0: ${{ steps.download.outputs.path }}
-      run: node "$TS0" build
+      run: node "${{ steps.download.outputs.path }}" build

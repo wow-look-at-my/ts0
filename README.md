@@ -16,7 +16,7 @@ npm install -g ts0
 
 ### Prebuilt ts0.cjs (buildhost)
 
-Some machines carry **stock Node and nothing else**: no npm, no node_modules, no git. For those, ts0 ships as a single platform-neutral JavaScript file on the org buildhost, with the TypeScript compiler inlined. Two ways to run it:
+Some machines carry **stock Node and nothing else**: no npm, no node_modules, no git. For those, ts0 ships as a single platform-neutral JavaScript file on the org buildhost, with the TypeScript compiler inlined. Ways to run it:
 
 ```sh
 # Saved to a file (for build wiring, e.g. a go:generate step):
@@ -27,27 +27,31 @@ node ts0.cjs build
 curl -fsSL "https://dl.pazer.build/ts0?branch=master&os=linux&arch=amd64" | node - build
 ```
 
-`ts0.cjs` is the same bytes for every platform. The store addresses artifacts by os and arch, so the URL parameters are required. Any supported pair returns the identical file. Save it with a `.cjs` extension. The bundle is CommonJS, which is what lets the pipe form run with no flags. A `.js` file instead parses as ESM if it lands inside a package that declares `"type": "module"`.
+`ts0.cjs` is the same bytes for every platform. The store addresses artifacts by os and arch. The URL parameters are required. Any supported pair returns the same file. Save it with a `.cjs` extension. The bundle is CommonJS, which is what lets the pipe form run with no flags.
+
+A `.js` file instead parses as ESM if it lands inside a package that declares `"type": "module"`.
 
 **Never pin a version.** A URL with no `v` resolves to the newest build of master and moves on every merge. A `?v=N` URL names one release. Once that release is gone, the URL answers 404. slopfix's `pins/download-version` rule rejects `v=` in a dl.pazer.build URL and strips it. Downloads are anonymous, because the project is public.
 
-**The one native piece: esbuild.** Everything else is inlined, but esbuild's compiler is a platform-native binary. On the first run, ts0.cjs downloads the matching binary into `TS0_CACHE_DIR`, or into `~/.cache/ts0/<build-id>/`, atomically and once. That binary is ~11 MB. It is published alongside each release at `https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical to the npm registry's `@esbuild` package. The inlined TypeScript compiler extracts to the same cache. Later runs touch nothing. Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, and windows/amd64.
+**The native piece: esbuild.** Everything else is inlined, but esbuild's compiler is a platform-native binary. On the first run, ts0.cjs downloads the matching binary into `TS0_CACHE_DIR`, or into `~/.cache/ts0/<build-id>/`, atomically and once. That binary is ~11 MB. It is published alongside each release at `https://dl.pazer.build/ts0/esbuild-<version>?os=...&arch=...`, byte-identical to the npm registry's `@esbuild` package. The inlined TypeScript compiler extracts to the same cache.
 
-A failed or stalled download is retried every 5 s, and each failure prints the network error. An attempt that receives no byte for 30 s is abandoned, however large the file. A 4xx answer, or the fifth failure, ends with a message naming the URL and the destination path -- there is no silent fallback. For firewalled or air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild version, or place the binary at the named destination yourself.
+Later runs touch nothing. Prebuilt natives exist for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, and windows/amd64.
+
+A failed or stalled download is retried every 5 s, and each failure prints the network error. An try that receives no byte for 30 s is abandoned, however large the file. A 4xx answer, or the fifth failure, ends with a message naming the URL and the destination path -- there is no silent fallback. For firewalled or air-gapped machines, set `TS0_ESBUILD_URL` to a mirror of the exact esbuild version, or place the binary at the named destination yourself.
 
 **Scope.** The file bundles the *toolchain*, not your project's dependencies. A project that imports npm packages still needs its own `node_modules`, installed however you like. That includes `@types/node` for Node-target globals. A browser-target project and a dependency-free project each build with `ts0.cjs` alone.
 
 ### GitHub Actions
 
-`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, never a pinned version to drift behind -- see "Version pinning" above. It puts `ts0` on PATH for the steps after it, then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
+`wow-look-at-my/ts0@master` is a composite action. It downloads the newest `ts0.cjs` from buildhost's master branch, not a pinned version to drift behind -- see "Version pinning" above. It puts `ts0` on PATH for the steps after it, then runs `ts0 test` and `ts0 build`, so a workflow never hand-rolls the download. It takes no arguments:
 
 ```yaml
 - uses: wow-look-at-my/ts0@master
 ```
 
-**There is no input for which command to run**, deliberately. `test` type-checks the whole project and bans explicit `any` before it runs the tests, and it type-checks even when a project has no tests yet. `build` type-checks again before it emits. A workflow that chooses the command can choose `--help`: exit 0, nothing checked, nothing tested, nothing built, and a green check for it.
+**There is no input for which command to run**, deliberately. `test` type-checks the whole project. And bans explicit `any` before it runs the tests, and it type-checks even when a project has no tests yet. `build` type-checks again before it emits. A workflow that chooses the command can choose `--help`: exit 0, nothing checked, nothing tested, nothing built, and a green check for it.
 
-A project with several build targets still needs only this one step. An example is a node-target helper script alongside a browser-target bundle. Give each target its own `ts0.json`, and the single `build` recurses into all of them. See "Nested projects" below.
+A project with several build targets still needs only this step. An example is a node-target helper script alongside a browser-target bundle. Give each target its own `ts0.json`, and the single `build` recurses into all of them. See "Nested projects" below.
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -135,6 +139,7 @@ Errors are red, warnings yellow, and a passing test's `ok` is green. Color follo
 | `minify`    | `boolean`             | `false`            | Minify the bundle                                             |
 | `sourcemap` | `boolean`             | `true`             | Emit a sourcemap (inlined for HTML entries)                   |
 | `test.pattern` | `string`           | `"**/*.test.ts"`   | Glob for test files                                           |
+| `test.build` | `string`             | --            | Shell command `ts0 test` runs ONCE in the config file's directory, after the type-check gate and before any test file runs, e.g. `"just build"` or `"ts0 build"`. A non-zero exit fails `ts0 test` with that code and runs no test. Tests that exercise the built output declare the build here instead of building it themselves (see [Testing the built output](#testing-the-built-output)) |
 | `embedAssets` | `boolean`           | `true`             | HTML entries: embed runtime-fetched assets (see below). Set `false` to skip. |
 | `assetDirs` | `string[]`            | --            | HTML entries: directories to scan for embeddable assets (relative to config file). When set, only these dirs are scanned instead of the entry's directory. |
 | `inlineAssets` | `boolean`          | `true`             | HTML entries: inline every referenced script/stylesheet into the HTML. Set `false` to emit a multi-file static site instead (see [Referenced assets](#referenced-assets-multi-file-sites)). |
@@ -184,7 +189,9 @@ The project's `.ts`/`.tsx` files are type-checked, with the DOM lib, before any 
 
 #### Referenced assets (multi-file sites)
 
-A single self-contained file is the wrong shape for an app served over HTTP. Nothing in it is independently cacheable, and a one-line HTML edit busts the whole JS bundle. `"inlineAssets": false` emits a normal static site instead. Each referenced local script and stylesheet bundles to its own file under `assetPath`. The tag keeps referencing it through `src=` or `href=`. An output name is the source's basename with the bundled extension (`src/main.ts` -> `main.js`), and carries no content hash. The serving side owns cache headers and ETags.
+A single self-contained file is the incorrect shape for an app served over HTTP. Nothing in it is independently cacheable, and a one-line HTML edit busts the whole JS bundle. `"inlineAssets": false` emits a normal static site instead. Each referenced local script and stylesheet bundles to its own file under `assetPath`. The tag keeps referencing it through `src=` or `href=`. An output name is the source's basename with the bundled extension (`src/main.ts` -> `main.js`), and carries no content hash.
+
+The serving side owns cache headers and ETags.
 
 ```json
 {
@@ -204,7 +211,9 @@ dist/
         app.css
 ```
 
-`assetPath` is the URL prefix verbatim. A single-page app wants the absolute form, `"/assets"`. The same shell is served on a deep link such as `/c/abc123`, where a relative URL resolves against the wrong directory. `"assets"` and `"./assets"` write the same files and emit relative URLs. Two sources with one basename, `a/main.ts` and `b/main.ts`, fail the build rather than overwrite each other. If any reference fails, nothing is written at all. External URLs, inline `<script>` bodies, bookmarklet hrefs and the fetch interceptor behave exactly as they do in inline mode. See `samples/html-referenced`.
+`assetPath` is the URL prefix verbatim. A single-page app wants the absolute form, `"/assets"`. The same shell is served on a deep link such as `/c/abc123`, where a relative URL resolves against the incorrect directory. `"assets"` and `"./assets"` write the same files and emit relative URLs. Sources with one basename, `a/main.ts` and `b/main.ts`, fail the build rather than overwrite each other. If any reference fails, nothing is written at all.
+
+External URLs, inline `<script>` bodies, bookmarklet hrefs and the fetch interceptor behave exactly as they do in inline mode. See `samples/html-referenced`.
 
 #### Bookmarklet links
 
@@ -236,11 +245,13 @@ ts0 build --entry pages/foo/index.html \
 
 `TEXT_ASSET_EXTS` and `BINARY_ASSET_EXTS`, at the top of `src/commands/build-html.ts`, define the asset extension lists. `.json` is deliberately excluded, so `ts0.json` and `package.json` are not picked up. Load runtime JSON through a JS import instead.
 
-The fetch interceptor exposes `window.__ts0_embedded_paths__`, an array of all embedded asset keys. Client code enumerates the available assets with it at runtime. One use is to discover every `.xml` file in a data directory without a hardcoded manifest.
+The fetch interceptor exposes `window.__ts0_embedded_paths__`, an array of all embedded asset keys. Client code enumerates the available assets with it at runtime. One use is to find every `.xml` file in a data directory without a hardcoded manifest.
 
 ### js (library) target
 
-If `entry` is a **directory**, `ts0 build` switches to the "js" library target. Every `*.ts` and `*.tsx` file under that directory compiles to a parallel `*.js` file under `outdir`, and the directory structure is preserved (`src/webgpu/sky.ts` -> `dist/webgpu/sky.js`). A library deployed to static hosting wants this shape, on GitHub Pages or a CDN. A consumer imports an individual module by URL. Each module also gets a matching `*.d.ts` by default. Those consumers therefore fetch the type declarations from the same URLs as the code. See [Type declarations](#type-declarations) below.
+If `entry` is a **directory**, `ts0 build` switches to the "js" library target. Every `*.ts` and `*.tsx` file under that directory compiles to a parallel `*.js` file under `outdir`. The directory structure is preserved (`src/webgpu/sky.ts` -> `dist/webgpu/sky.js`). A library deployed to static hosting wants this shape, on GitHub Pages or a CDN. A consumer imports an individual module by URL. Each module also gets a matching `*.d.ts` by default.
+
+Those consumers therefore fetch the type declarations from the same URLs as the code. See [Type declarations](#type-declarations) below.
 
 ```json
 {
@@ -253,7 +264,7 @@ If `entry` is a **directory**, `ts0 build` switches to the "js" library target. 
 
 - Each file is its own esbuild entry point. Code shared across entries is **deduplicated into a chunk**, for `esm` output, and imported. It is never copied into each output. A consumer still writes a single import, and the browser fetches any shared chunk transitively. A loader-backed import stays inlined in the importing module, as does a non-shared local import. An example is `import src from "./shader.wgsl"`, enabled by the `loaders` field above. Set `"bundleShared": false` to force fully self-contained outputs, with duplication. That is the right trade only when outputs are consumed in isolation, where fetching a sibling chunk is not possible.
 - Declaration files (`*.d.ts`) and tests (`*.test.*`, `*.spec.*`) are skipped.
-- Type-checking uses **bundler** module resolution, which matches esbuild. An extensionless relative import and a loader-backed import therefore type-check, and library source needs no `.ts` extension. Add an ambient declaration so a loader import type-checks, such as `declare module "*.wgsl" { const s: string; export default s; }`.
+- Type-checking resolution of the uses **bundler** module, which matches esbuild. An extensionless relative import and a loader-backed import therefore type-check, and library source needs no `.ts` extension. Add an ambient declaration so a loader import type-checks, such as `declare module "*.wgsl" { const s: string; export default s; }`.
 - Test files are the exception. `ts0 test` hands them to Node, whose resolver takes the specifier literally. Give their imports a real `.ts` or `.tsx` extension, even though the sources beside them need none.
 - `ts0 run` does not apply to this target, because there is no single entry to run. Use `ts0 build`. The single-file `outfile` option is ignored too. Output always goes to `outdir`.
 
@@ -264,7 +275,7 @@ See `samples/js` for a complete example.
 By default the js target also emits TypeScript declarations. Every compiled module gets a parallel `*.d.ts` under `outdir`, mirroring the source tree exactly like the `*.js` outputs (`src/ui/timeline-view.ts` -> `dist/ui/timeline-view.js` **and** `dist/ui/timeline-view.d.ts`). A library deployed to static hosting therefore ships its types at the same URLs as its code. A consumer fetches `x.js` for the runtime and `x.d.ts` beside it for the types, and TypeScript pairs them automatically.
 
 - **Default on.** A library target exists to be consumed. Set `"declarations": false` in `ts0.json` to opt out.
-- Emission is a separate `tsc` pass (`declaration` plus `emitDeclarationOnly`) over exactly the modules the build compiled. Tests, `*.d.ts` sources and esbuild's shared `chunk-*.js` files therefore never get declarations. It runs only on `ts0 build`, and on each watch rebuild. `ts0 run` and `ts0 test` never write output.
+- Emission is a separate `tsc` pass (`declaration` plus `emitDeclarationOnly`) over exactly the modules the build compiled. Tests, `*.d.ts` sources and esbuild's shared `chunk-*.js` files therefore never get declarations. It runs only on `ts0 build`, and on each watch rebuild. `ts0 run` and `ts0 test` never emit declarations. `ts0 test` writes output only through a declared `test.build` command.
 - The pass is **all-or-nothing**. Any error fails the build and writes no `.d.ts` at all, so there is no partial tree. A type error never reaches this pass. The errors that do are declaration-only diagnostics such as TS4023, "cannot be named". Output is deterministic: one input produces byte-identical `.d.ts`, so a committed copy of fetched declarations diffs cleanly.
 - Relative import specifiers are kept as written, explicit `.ts` and `.tsx` extensions included. That is the standard declaration shape for an `allowImportingTsExtensions` project. TypeScript resolves `./x.ts` inside a `.d.ts` by extension substitution (`.ts` -> `.tsx` -> `.d.ts`) to the deployed sibling `x.d.ts`, under both `bundler` and `NodeNext` consumer resolution. No rewriting is needed. TypeScript's `rewriteRelativeImportExtensions` does not help either, because it affects JavaScript emit only.
 - One structural constraint. Declaration output mirrors the entry directory. A module that imports a **source outside the entry directory** therefore fails the build with `TS6059`. The bundler can inline such an import into the `.js`, but a mirrored `.d.ts` tree cannot represent it. Move the file under the entry directory, or set `"declarations": false`.
@@ -300,6 +311,24 @@ The bundle keeps that line exactly as written — import attributes included —
 
 See `samples/external-css` for a complete example.
 
+### Testing the built output
+
+A test that runs the shipped artifact, such as a GitHub Action's `dist/index.js`, needs the build to exist first. Do not build it from a test file's `before` hook. `ts0 test` runs test files in parallel, so every file will rebuild the same output directory at the same time. Declare the build in `ts0.json` instead:
+
+```json
+{
+    "entry": "src/index.ts",
+    "outfile": "dist/index.js",
+    "test": {
+        "build": "just build"
+    }
+}
+```
+
+`ts0 test` then runs `just build` once, in the config file's directory, after the type-check gate passes and before it compiles or runs any test file. The command runs through the shell. It can be any build: `ts0 build`, a justfile recipe that stages extra files beside the bundle, or `npm run build`. Its output is printed in line. A non-zero exit fails `ts0 test` with the same exit code, and no test runs. A failing gate means the build never runs.
+
+Each nested project runs its own `test.build`, under its own config. `ts0 test --watch` runs it again on every cycle.
+
 ### JSX / TSX
 
 Set `jsx` to compile `.tsx`/`.jsx`. The setting is threaded into both the type-checker and esbuild -- for **every** entry kind, including HTML entries whose `<script>` tags pull in `.tsx`. A Preact app uses the automatic runtime:
@@ -317,12 +346,14 @@ With `"automatic"`, JSX compiles to `preact/jsx-runtime` calls and needs no fact
 ## How it works
 
 - **Type-checking is mandatory. There is no way to build, run, or test un-checked code.** `ts0` type-checks before it emits *or executes* anything. `build`, `run` and `test` all check first, and produce or run nothing when the check fails. That holds for every entry kind -- `.ts`, `.html`, and the directory (js library) target -- wherever the entry lives, a dot-directory such as `.github/scripts/` included. Even `ts0 run --no-build` type-checks first, although it skips the bundle and writes no artifact. Node's `--experimental-strip-types` only strips annotations and does not type-check, so ts0 runs `tsc` itself before it hands sources to Node. There is no escape hatch. Every `--watch` mode re-checks on each cycle, `build` and `test` alike. A new type error therefore stops the rebuild or the run, and leaves the previous good output in place.
-- **No `any`, explicit or implicit.** `strict` makes an *implicit* `any` an error. ts0 also rejects an *explicit* one: `x: any`, `x as any`, `<any>x`, `any[]`, `Promise<any>`, in sources and `.d.ts` files alike. An explicit `any` switches type-checking off wherever it appears. Annotate the real type, or use `unknown` and narrow it. The check parses with the TypeScript compiler, so an identifier, a string, a comment or JSX text that merely contains the word "any" is untouched. It runs inside the same gate, so it fails `build`, `run` and `test` alike. A directory listed in `exclude` is skipped by it too.
+- **No `any`, explicit or implicit.** `strict` makes an *implicit* `any` an error. ts0 also rejects an *explicit* one: `x: any`, `x as any`, `<any>x`, `any[]`, `Promise<any>`, in sources and `.d.ts` files alike. An explicit `any` switches type-checking off wherever it appears. Annotate the real type, or use `unknown` and narrow it. The check parses with the TypeScript compiler, so an identifier, a string, a comment or JSX text that merely contains the word "any" is untouched. It runs inside the same gate. It fails `build`, `run` and `test` alike. It too skips a directory listed in `exclude`.
 - **Build:** `ts0 build` runs `tsc --noEmit` against a tsconfig generated from your `ts0.json`, then bundles with esbuild. That tsconfig carries the DOM libs for a browser or HTML entry, and ESNext for Node. A pure-JS project with no TypeScript sources has nothing to check and builds straight through.
 - **Run:** `ts0 run` type-checks, bundles, then runs the output with Node. With `--no-build` it type-checks, skips the bundle, and executes the sources directly through `node --experimental-strip-types`. That is the fast dev loop, minus the artifact, and never minus the type-check.
-- **Test:** `ts0 test` type-checks the whole project first. Only if that passes, it compiles each discovered test file with the same compiler the build uses, and runs the results with `node --test`. A type error anywhere fails the command, and no tests run. `ts0 test --watch` re-type-checks and re-runs on every change. ts0 drives that watch loop itself rather than `node --test --watch`, so nothing skips the check.
+- **Test:** `ts0 test` type-checks the whole project first. It runs the project's `test.build` command once, when one is declared, and then compiles each discovered test file with the same compiler the build uses. And runs the results with `node --test`. This happens only if that passes. A type error anywhere fails the command, and no tests run. `ts0 test --watch` re-type-checks and re-runs on every change. ts0 drives that watch loop itself rather than `node --test --watch`, so nothing skips the check.
 
-    Compiling rather than stripping is what lets a test import whatever the build supports: a `loaders` extension, JSX, an `external` specifier. It is also what lets a CommonJS-format project run at all. Stripping erases type annotations without turning `import` into `require`, so such a project once passed the gate and then died inside Node on "Cannot use import statement outside a module". Each compiled file keeps its source's module format and is written beside it, then deleted after the run. `__dirname`, `require` and `import.meta.dirname` therefore all mean what they meant. One thing cannot survive: `require.main === module` in a module under test. Everything in a bundle shares one module object, so that guard fires. Export the work and leave the invocation to the entry file.
+    Compiling rather than stripping is what lets a test import whatever the build supports: a `loaders` extension, JSX, an `external` specifier. It is also what lets a CommonJS-format project run at all. Stripping erases type annotations without turning `import` into `require`, so such a project once passed the gate and then died inside Node on "Cannot use import statement outside a module". Each compiled file keeps its source's module format and is written beside it, then deleted after the run. `__dirname`, `require` and `import.meta.dirname` therefore all mean what they meant. One thing cannot survive: `require.main === module` in a module under test.
+
+    Everything in a bundle shares one module object. That guard fires. Export the work and leave the invocation to the entry file.
 - **Nested projects:** a subdirectory with its own `ts0.json` is its own project. `ts0 build` and `ts0 test` recurse into every one of them, each under its own config, to any depth. Nothing is skipped, and a broken nested project fails the parent. `ts0 run` executes one entry, so it builds only its own project.
 
 ## License
