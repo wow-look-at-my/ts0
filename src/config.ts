@@ -148,6 +148,7 @@ export interface Ts0Config {
 	// browser target ignores this field and always bundles.
 	bundleDependencies?: boolean;
 
+
 	// Whether code shared by more than one output module may be factored into a
 	// shared chunk that the outputs import (default true). Only the js (library)
 	// target emits more than one module, so only it is affected; the
@@ -269,6 +270,7 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 	if (config.bundleDependencies !== undefined && typeof config.bundleDependencies !== "boolean") {
 		throw new Error("ts0: bundleDependencies must be a boolean");
 	}
+
 
 	// Auto-detect entry if not specified
 	if (!config.entry) {

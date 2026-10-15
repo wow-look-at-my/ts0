@@ -72,6 +72,140 @@ The suites need the linked `ts0` on PATH, hence `npm link`, and bubblewrap for t
 
 Unit tests are every `src/**/*.test.ts`, run by `node --experimental-strip-types --test`. Every `tests/*.dats` file is a behavioural suite run by [dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0` and `npm link`s it, then each suite stages a project and asserts what the build WROTE. A staged project gets the repo's `node_modules` symlinked in. That is the position it resolves `@types/node` and `preact` from when it is built in place. `network: false` on every file proves a build never needs a network. The dats action installs bubblewrap and clears the AppArmor restriction that denies it a user namespace, and exposes no way to turn the sandbox off, so CI runs sandboxed too. ts0 is public, so its jobs run on GitHub-hosted runners; the org's own pool is for private repos, which pay for minutes. No job uses GitHub artifact storage -- a hand-off rides `wow-look-at-my/actions@cache-upload#latest`. `docs/testing.md` says what each suite and each CI step covers.
 
+- `src/runtime/fetch-interceptor.test.ts` evaluates the single-file fetch
+    interceptor against a window/document shim and asserts it serves embedded
+    assets for string, `URL`-object, and `Request` fetch inputs.
+- `src/commands/typecheck-entry.test.ts` drives the real `runTypecheck` over
+    temp projects and pins the gate's file set: a type error in the configured
+    entry fails the gate whether or not the entry sits in a dot-directory.
+- `src/commands/test-discovery.test.ts` drives the real CLI over a temp project
+    with a nested ts0 project and pins the recursion: a broken nested project
+    fails the parent's `build` AND `test`, a clean one is built and tested by
+    it, and `ts0 run` builds only its own project.
+
+Everything else is a **behavioural suite** in `tests/*.dats`, run by
+[dats](https://github.com/wow-look-at-my/dats). CI builds `dist/ts0`,
+`npm link`s it, fetches the dats binary and runs the suites. Every test stages
+its project into its own directory and asserts what the build WROTE --
+declarative `outputs.files` match/notMatch checks, with shell only for
+properties that span files. A staged project gets the repo's `node_modules`
+symlinked in, the position it resolves `@types/node`/`preact` from when built
+in place.
+1. Building `dist/ts0` from source.
+2. `npm link`ing it.
+3. Running `ts0 init`, `build`, `run`, `test` against a fresh tmp project.
+4. Running `ts0 build` and `ts0 test` against `samples/basic`.
+5. Running `ts0 build` against `samples/html` and asserting the bundled JS/CSS
+    are inlined into a single `dist/index.html`.
+6. Running `ts0 build` against `samples/html-jsx` and asserting the JSX compiled
+    to the automatic Preact runtime (`preact/jsx-runtime`) with no
+    `React.createElement`/`React.Fragment` &mdash; the regression guard for the
+    "React is not defined" bug where JSX config wasn't threaded into the HTML
+    build path. (Both HTML samples also now exercise the type-check on the HTML
+    path, since HTML entries are type-checked rather than skipped.) The
+    component's tagline contains the word "any" as JSX text, and CI asserts it
+    reaches the output &mdash; the guard that the explicit-`any` ban stays a
+    parse and never becomes a text search.
+7. Running `ts0 build` against `samples/js` (a **directory** entry) and asserting
+    the js library target compiled every `src/**/*.ts` to a parallel
+    `dist/**/*.js`, skipped `*.d.ts`, **deduplicated** a shared module into a
+    chunk (the shared body appears in exactly one output file, not copied into
+    each importer), inlined a non-shared `.frag` text-loader import, and emitted
+    no sourcemaps. The same step asserts the **declaration emit**: a parallel
+    `dist/**/*.d.ts` tree mirroring the sources (including a `.tsx` component),
+    `.ts`/`.tsx` extension specifiers preserved in declaration output,
+    no `.d.ts` for test files or esbuild chunks, the ambient `*.d.ts` source
+    not copied, no `.d.ts.map`, and byte-identical `.d.ts` across a rebuild
+    (determinism). A follow-up step proves `"declarations": false` opts out
+    (`.js` emitted, zero `.d.ts`).
+8. Running `ts0 build` against `samples/userscript` and asserting the
+    userscript-bundling features: the `==UserScript==` header re-prepended
+    byte-exactly at the top (exactly once, stable across a rebuild &mdash;
+    `preserveHeader`), the IIFE assigned to the configured `globalName`, no
+    module statements and no shebang in the browser output, and the
+    extensionless `./lib/greet` import both type-checked (browser targets
+    gate-check with bundler resolution) and inlined. Follow-up steps prove
+    `--config <path>` builds the sample from the repo root and that the
+    `exclude` config skips a broken directory the gate would otherwise fail on.
+9. Running `ts0 build` against `samples/bookmarklet` and asserting the
+    `javascript:<file>` href was replaced by a percent-encoded minified
+    bundle that decodes back to the program (lib import inlined), while a
+    real `javascript:void(0)` href and the rest of the page stay untouched
+    and no fetch interceptor is injected.
+10. The "Type-check gate blocks broken output" step: a project with a deliberate
+    type error must make **every** code path &mdash; `ts0 build`, `ts0 run`,
+    `ts0 run --no-build`, and `ts0 test` &mdash; exit non-zero and emit/execute
+    nothing (no `dist/`, no test run). The error strips to valid JS and the test
+    file registers no tests, so a `--no-build` or `test` run would exit 0 if the
+    check were ever skipped &mdash; this step catches exactly that regression.
+    It also repeats the check for a **js (directory) target**, proving a type
+    error leaves no `dist/` at all &mdash; no `.js` tree and no partial `.d.ts`
+    tree, and for an entry under a **dot-directory** (`.github/scripts/step.ts`),
+    which `**/*` alone never reaches.
+11. The "Explicit any is a build error" step: a program that is *valid*
+    TypeScript except for an explicit `any` must fail `build`, `run`,
+    `run --no-build`, and `test`, and emit nothing &mdash; tsc has no flag for
+    this, so a skipped ban would build cleanly and only this step catches it.
+    It walks every spelling (`x: any`, `as any`, `<any>`, `any[]`,
+    `Promise<any>`, `type A = any`, and an `any` inside a `.d.ts`), then
+    proves the look-alikes still build: identifiers, object keys, strings,
+    comments and regexes containing the word `any`.
+The files declare `network: false`, so a local run proves a build never needs
+one. **CI runs `--no-sandbox` and therefore does not**: the org's self-hosted
+runner denies unprivileged user namespaces, so bwrap cannot start and there is
+no docker fallback. Run the suites locally (with bwrap installed) to exercise
+the sandboxed contract.
+
+- `tests/cli.dats` -- `ts0 init` scaffolds a project that `build`, `run` and
+    `test` then handle end to end; `--config <path>` builds a named config from
+    elsewhere in the tree (rootDir stays the config file's own directory).
+- `tests/gate.dats` -- the unskippable gate. A type error must make **every**
+    path (`build`, `run`, `run --no-build`, `test`) exit non-zero and emit or
+    execute nothing, for the node target and the js (directory) target alike
+    (no `.js` tree, no partial `.d.ts`). The fixtures are shaped so a skipped
+    check would look fine: the error strips to valid JS and the test file
+    registers no tests, so `--no-build` and `test` would exit 0 if the gate were
+    bypassed. Then the explicit-`any` ban across every spelling (`x: any`,
+    `as any`, `<any>`, `any[]`, `Promise<any>`, `type A = any`, and an `any`
+    inside a `.d.ts`), the look-alikes that must still build (identifiers,
+    object keys, strings, comments, regexes reading "any" -- the guard that the
+    ban stays a parse), `exclude` limiting the gate without changing the build,
+    and a type error in an **HTML** entry failing the build (they were once
+    exempt and reported success regardless).
+- `tests/samples.dats` -- one test per sample: `basic` (build + `ts0 test`);
+    `html` (JS/CSS inlined into one document, `url()` rewritten to `data:`,
+    inline-module bundling, the fetch interceptor with no leftover
+    `__ASSETS_JSON__`) and the CLI `--entry`/`--outfile` overrides; `html-jsx`
+    (automatic Preact runtime, no `React.createElement`, and a JSX tagline
+    reading "any questions" that must survive); `js` (`ts0 test` first &mdash;
+    which EXECUTES `vec.test.ts` and so catches an import that bundles but that
+    Node cannot resolve at run time &mdash; then tree mirrored, shared code
+    deduped into a chunk rather than copied, `.frag` text loader, the parallel
+    `.d.ts` tree with `.ts`/`.tsx` specifiers preserved, no `.d.ts` for tests or
+    chunks, no `.d.ts.map`, and byte-identical declarations across a rebuild)
+    plus the `"declarations": false` opt-out and the `"bundleShared": false`
+    inverse (the same sample built both ways: chunk + single shared body by
+    default, then zero chunks with the body copied into each importer);
+    `userscript` (the `==UserScript==`
+    header byte-exact at the top, exactly once, stable across a rebuild, IIFE on
+    the configured global, no module statements, no shebang); `bookmarklet` (the
+    `javascript:<file>` href percent-encoded and decoding back to the bundled
+    program, a real `javascript:void(0)` href untouched); `external-css` (the
+    `with { type: "css" }` import emitted verbatim, the stylesheet text absent
+    from every emitted file, a neighbouring ordinary import still bundled) plus
+    its guardrail &mdash; the same program WITHOUT `external` must fail the
+    build and write nothing, since silent inlining would defeat the feature.
+- `tests/html-referenced.dats` -- the multi-file HTML target
+    (`inlineAssets: false`): the shell plus one bundle per reference under
+    `assetPath`, nothing inlined, references rewritten, the external stylesheet
+    untouched, real bundles, and a **basename collision** failing the build with
+    nothing written.
+
+CI still builds the two HTML samples into the workspace after the suites, but
+that step is not a test -- it only produces the downloadable artifacts.
+
+If you change CLI behavior, update the relevant `samples/*` and the matching
+`tests/*.dats` suite so the new behavior is covered.
 If you change CLI behavior, update the relevant `samples/*` and the matching `tests/*.dats` suite so the new behavior is covered.
 
 ## Conventions
@@ -210,10 +344,55 @@ Covered by `tests/html-referenced.dats`, not a CI shell step.
 
 When `entry` resolves to a **directory**, and not to a `.ts` or `.html` file, `build.ts` delegates to `commands/build-js.ts`. `isJsTarget` does that directory check, after `isHtmlEntry`. This target compiles every `*.ts`, `*.tsx`, `*.mts` and `*.cts` file under the directory as a separate esbuild entry point. `outbase` is the entry dir and `outdir` is `dist`. The source tree is therefore mirrored (`src/webgpu/sky.ts` -> `dist/webgpu/sky.js`). `*.d.ts`, `*.test.*` and `*.spec.*` are skipped.
 
+Code shared across entries is **deduplicated**, not duplicated: `splitting: true`
+(enabled for `esm` output) makes esbuild emit a module imported by 2+ entries
+once into a chunk and import it, rather than inlining a copy into every output.
+A consumer still imports a single entry file — the browser fetches any shared
+chunk transitively. Non-shared local imports and loader-backed imports (`.wgsl`
+text, etc.) stay inlined. `"bundleShared": false` turns splitting off to force
+self-contained (duplicating) outputs — a first-class option, NOT the `esbuild`
+escape hatch, which is slated for removal along with esbuild itself. Splitting is
+only expressible for `esm`, so other formats duplicate regardless.
 Code shared across entries is **deduplicated**, not duplicated. `splitting: true` is enabled for `esm` output. A module imported by two or more entries is then emitted once into a chunk and imported, rather than inlined into every output. A consumer still imports a single entry file, and the browser fetches any shared chunk transitively. A non-shared local import stays inlined, as does a loader-backed import such as `.wgsl` text. `"bundleShared": false` turns splitting off, to force self-contained outputs that duplicate. It is a first-class option, NOT the `esbuild` escape hatch, which is slated for removal along with esbuild itself. Splitting is only expressible for `esm`, so every other format duplicates regardless.
 
 It is mutually exclusive with the HTML target and the default single-entry target. `outfile` is ignored, because output always goes to `outdir`. `ts0 run` rejects it, because there is no single entry to run. The non-output esbuild options, such as platform, format and jsx, come from `baseEsbuildOptions()` in `commands/esbuild-base.ts`. The default target shares that function. The two therefore cannot drift.
 
+## External imports (`external`)
+
+`external` lists import specifiers that stay **references** in the output: the
+import statement is emitted verbatim and the target's contents are never pulled
+in. It is threaded through `baseEsbuildOptions()`, so the single-entry and js
+targets both honor it — "this import is resolved at runtime" is a property of
+the code, not of which target compiles it.
+
+The motivating case is a CSS module script
+(`import s from "./x.css" with { type: "css" }`), which the browser resolves and
+constructs itself; also peer dependencies a library must not embed, and import-map
+entries.
+
+- **It is ts0 vocabulary, not an esbuild passthrough.** The `esbuild` escape
+    hatch and esbuild itself are slated for removal; `external` is defined in
+    terms of import specifiers and must survive a bundler swap. Do not
+    reintroduce it as a raw passthrough or document it in esbuild's terms.
+- **It must never become a way to silence an unsupported import.** An import
+    the bundler cannot handle and that is NOT listed in `external` has to keep
+    failing the build, with nothing written. That hard failure is the whole
+    guardrail: silent inlining would put stylesheet text into the JS and defeat
+    the feature. `tests/samples.dats` carries "an unsupported CSS-type import
+    errors instead of silently inlining" specifically to keep this honest — if
+    that test ever starts passing, the guardrail is gone.
+- Matching is by specifier as written (`"./styles.css"`, `"lit"`, `"*.css"`
+    with `*` matching any run of characters), never by resolved file path.
+- External imports are still type-checked; the sample pairs one with an ambient
+    `declare module "*.css"`.
+
+Type-checking for this target uses `moduleResolution: "Bundler"` (see
+"Type-checking" above). For loader-backed imports (e.g. `.wgsl` as text), set
+the loader with the `loaders` config field (`{ ".wgsl": "text" }`, threaded into
+esbuild by `baseEsbuildOptions`) and provide an ambient `declare module "*.wgsl"`
+so the import also type-checks; esbuild does the actual inlining. ts0 applies no
+loaders by default. (The `esbuild.loader` escape hatch still works and overrides
+`loaders`.)
 ## Dependency bundling (`bundleDependencies`)
 
 A node-target build leaves an imported package as a `require("pkg")` call, through esbuild's `packages: "external"`. That is right for a CLI installed alongside its node_modules. `"bundleDependencies": true` compiles those packages in instead, for an artifact that must run where its node_modules does not exist. One example is a GitHub Action, whose release tag ships `dist/` and nothing else. It is threaded through `baseEsbuildOptions`, so `external` still wins per specifier. A native addon or a peer dependency opts back out that way.
