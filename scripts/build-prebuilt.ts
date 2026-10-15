@@ -112,13 +112,6 @@ if (ts.sys.setBlocking) ts.sys.setBlocking();
 ts.executeCommandLine(ts.sys, () => {}, ts.sys.args);
 `;
 
-// embeddedFiles collects the text files inlined into ts0.cjs, keyed by their
-// cache-relative extraction path: the pruned typescript package (the compiler
-// API, the standard libraries. The generated bin/tsc driver above --
-// tsserver, the CLI rebuild, and the locale directories are never shipped),
-// the whole @types/node package (so a Node-target project type-checks with
-// no @types/node install of its own -- see nodeTypeRootsDir in
-// commands/build.ts), and the fetch-interceptor template.
 function embeddedFiles(): Record<string, string> {
 	const files: Record<string, string> = {};
 	const put = (key: string, from: string): void => {
