@@ -158,6 +158,24 @@ printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$anydi
 	test -f dist/main.js
 )
 
+echo "== the embedded @types/node carries the packages it imports from =="
+# @types/node imports undici-types for fetch, so Response, Request and Headers
+# live there. A bundle that embeds @types/node alone leaves a Response with no
+# members: this program fails with "Property 'ok' does not exist on type
+# 'Response'", in a project whose only fault is trusting the types ts0 ships.
+# tsc reports the members rather than the missing package, so nothing else in
+# this file would have caught it. It only reproduces in the bundle -- from
+# source, undici-types sits beside @types/node in ts0's own node_modules.
+fetchdir=$(mktemp -d)
+printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$fetchdir/ts0.json"
+mkdir -p "$fetchdir/src"
+printf 'export async function get(url: string): Promise<unknown> {\n\tconst res = await fetch(url);\n\tif (!res.ok) throw new Error(`HTTP ${res.status}`);\n\treturn res.json();\n}\n' > "$fetchdir/src/main.ts"
+(
+	cd "$fetchdir"
+	t0 build
+	test -f dist/main.js
+)
+
 echo "== samples/basic (build + test) =="
 (
 	cd "$REPO/samples/basic"

@@ -1,12 +1,25 @@
 import * as esbuild from "esbuild";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { readdirSync, readFileSync, statSync, existsSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { loadConfig, type Ts0Config } from "../config.ts";
 import { buildHtml, isHtmlEntry } from "./build-html.ts";
 import { buildJs, isJsTarget } from "./build-js.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 import { checkNoExplicitAny } from "./explicit-any.ts";
 import { formatEsbuildDiagnostic } from "../reporter.ts";
+
+const require = createRequire(import.meta.url);
+
+// nodeTypeRootsDir resolves the directory holding the @types packages ts0
+// ships with (@types/node), the same way runTsc resolves the typescript
+// binary from ts0's own dependencies -- via createRequire(import.meta.url),
+// which the prebuilt bundle rewrites to the extraction cache. A Node-target
+// project then type-checks with no @types/node install of its own, on every
+// consumption path (prebuilt, npm/git install, running from source).
+function nodeTypeRootsDir(): string {
+	return dirname(dirname(require.resolve("@types/node/package.json")));
+}
 
 export interface BuildResult {
 	success: boolean;
@@ -257,8 +270,11 @@ function tsconfigJsx(jsx: "automatic" | "transform" | "preserve"): string {
 // - `lib` depends on target: browser code -- an explicit "browser" target or
 //   any HTML entry (always browser) -- needs the DOM lib so document/fetch/
 //   addEventListener and friends resolve. Node code gets the ESNext lib only;
-//   its globals come from @types/node. Without this, every HTML/browser
-//   project would fail type-checking on "Cannot find name 'document'".
+//   its globals (console, process, node:fs, ...) come from @types/node, which
+//   ts0 ships with itself via `typeRoots` (nodeTypeRootsDir) -- a Node-target
+//   project needs no @types/node install of its own. Without the DOM lib,
+//   every HTML/browser project would fail type-checking on "Cannot find name
+//   'document'".
 // - Bundler-consumed code gets bundler module resolution: the js (library)
 //   target AND any browser-target/HTML entry are compiled by esbuild, so the
 //   gate checks with the resolution the bundler actually uses -- permitting
@@ -283,6 +299,12 @@ function generatedCompilerOptions(config: Ts0Config, rootDir: string): Record<st
 		esModuleInterop: true,
 		allowImportingTsExtensions: true,
 	};
+	if (!isBrowser) {
+		// The consumer's own node_modules/@types stays in the search too, so an
+		// explicit @types/node install (or another @types package) still resolves;
+		// ts0's bundled copy is what makes that install unnecessary, not forbidden.
+		compilerOptions.typeRoots = [nodeTypeRootsDir(), join(rootDir, "node_modules", "@types")];
+	}
 	if (config.jsx) {
 		compilerOptions.jsx = tsconfigJsx(config.jsx);
 		if (config.jsxImportSource) {
@@ -302,7 +324,7 @@ async function runTsc(
 	tempName: string,
 	tsconfigContent: unknown,
 ): Promise<{ success: boolean; output: string }> {
-	const { execSync } = await import("node:child_process");
+	const { execFile } = await import("node:child_process");
 	const { createRequire } = await import("node:module");
 
 	// Find tsc from ts0's dependencies, not the project's
@@ -315,21 +337,22 @@ async function runTsc(
 	writeFileSync(tempTsconfig, JSON.stringify(tsconfigContent, null, "\t"));
 
 	try {
-		// Quoted: tscPath/tempTsconfig may live under paths with spaces (a
-		// node_modules under a spaced directory, or the prebuilt ts0.js
-		// cache under e.g. "C:\\Users\\First Last\\.cache").
-		const output = execSync(`node "${tscPath}" --project "${tempTsconfig}"`, {
-			cwd: rootDir,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
+		// execFile, not execSync: this is the one call a whole project's check
+		// waits on, and execSync blocks the event loop, so a caller running
+		// several projects at once got no concurrency at all whatever it did.
+		// Passing argv rather than a command line also drops the quoting
+		// question -- tscPath and tempTsconfig may live under a path with
+		// spaces, such as "C:\\Users\\First Last\\.cache".
+		return await new Promise((resolve) => {
+			// A default 1 MB buffer truncates a large project's diagnostics and
+			// reports the truncation as the failure, which reads as a compiler
+			// crash rather than as the type errors it actually found.
+			const opts = { cwd: rootDir, encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024 };
+			execFile("node", [tscPath, "--project", tempTsconfig], opts, (err, stdout, stderr) => {
+				if (!err) return resolve({ success: true, output: stdout });
+				resolve({ success: false, output: stdout || stderr || String(err) });
+			});
 		});
-		return { success: true, output };
-	} catch (err) {
-		const error = err as { stdout?: string; stderr?: string };
-		return {
-			success: false,
-			output: error.stdout || error.stderr || String(err),
-		};
 	} finally {
 		unlinkSync(tempTsconfig);
 	}

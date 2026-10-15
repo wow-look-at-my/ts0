@@ -3,4 +3,6 @@ dist/
 *.log
 .ts0-tsconfig.json
 .ts0-tsconfig-emit.json
+*.ts0.cjs
+*.ts0.mjs
 build-prebuilt/

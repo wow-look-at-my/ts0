@@ -1,22 +1,12 @@
 name: Run ts0
-description: Download ts0 from buildhost and run it, without a caller having to hand-roll the download
+description: Type-check, test and build a ts0 project, without a caller having to hand-roll the download
 
+# No input for WHAT to run: a caller that can choose the command can choose `--help`.
 inputs:
-  args:
-    description: 'Arguments to pass to ts0 (e.g. "build", "test", "build --entry src/demo/main.tsx --outfile dist-demo/assets/app.js")'
-    required: true
   working-directory:
     description: 'Directory to run ts0 from'
     required: false
     default: '.'
-  branch:
-    description: 'ts0 branch to resolve the newest build from. ts0 is a build TOOL, not a pinned dependency: this defaults to master (always current), never an immutable version.'
-    required: false
-    default: 'master'
-  version:
-    description: 'ts0 release version to download (e.g. v35); overrides branch when set, for the rare case reproducible output matters more than tracking latest'
-    required: false
-    default: ''
 
 outputs:
   path:
@@ -26,19 +16,36 @@ outputs:
 runs:
   using: composite
   steps:
-    # os/arch default to the runner's own platform; ts0.cjs is the same
-    # platform-neutral file for every os/arch pair (buildhost-download still
-    # requires the params, but any supported pair returns identical bytes).
+    # Optional inputs omitted on purpose: ts0 is a build tool, so CI tracks latest.
     - name: Download ts0
       id: download
       uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
       with:
         project: ts0
-        branch: ${{ inputs.version == '' && inputs.branch || '' }}
-        version: ${{ inputs.version }}
 
-    - name: Run ts0
+    # Later steps, and a build a test starts, run `ts0` by name, so a caller never installs it by hand.
+    - name: Put ts0 on PATH
+      shell: bash
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: |
+        dir="$RUNNER_TEMP/ts0-bin"
+        mkdir -p "$dir"
+        cp "$TS0" "$dir/ts0.cjs"
+        cp "$GITHUB_ACTION_PATH/bin/ts0" "$dir/ts0"
+        echo "$dir" >> "$GITHUB_PATH"
+
+    # `test` type-checks before it discovers a file, so this gates a project with no tests.
+    - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: |
-        node "${{ steps.download.outputs.path }}" ${{ inputs.args }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" test
+
+    - name: ts0 build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TS0: ${{ steps.download.outputs.path }}
+      run: node "$TS0" build
