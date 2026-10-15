@@ -1,16 +1,13 @@
 # `ts0 test` must run a project's test files AT THE SAME TIME.
 #
 # node's test runner defaults its concurrency to `availableParallelism() - 1`.
-# That is 1 on a two-core CI runner, so each file waited for the one before it
-# and a suite cost the SUM of its files. Measured on a real run: five files, 62s
-# then 43s back to back, 106s total. ts0 now passes an explicit
-# `--test-concurrency`.
+# Measured on a real run: files, 62s then 43s back to back, 106s total. ts0 now
+# passes an explicit `--test-concurrency`.
 #
 # The proof is a wall clock, because a flag in an argv list is not the
-# behaviour. Two files each block for BLOCK_MS. One run forces a concurrency of
-# 1 through TS0_TEST_CONCURRENCY, the other takes the default. The forced run is
-# also the negative control: if ts0 stops passing the flag, that run goes
-# parallel too and stops costing both files.
+# behaviour. Files each block for BLOCK_MS. The forced run is also the negative
+# control: if ts0 stops passing the flag, that run goes parallel too and stops
+# costing both files.
 sandbox:
 	network: false
 
@@ -26,9 +23,9 @@ tests:
 			# A staged project has no @types/node, so the fixture cannot import
 			# node:test or call setTimeout without failing the gate for the wrong
 			# reason. Atomics.wait is in the standard library and blocks the
-			# thread it runs on, which is the right shape anyway: node isolates
-			# each test file in its own process, so a blocked thread is what a
-			# slow test file looks like to the runner.
+			# thread it runs on, which is the right shape anyway. Node isolates
+			# each test file in its own process. A blocked thread is what a slow
+			# test file looks like to the runner.
 			src/a.test.ts: |
 				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);
 				export const done = 1;
@@ -62,11 +59,9 @@ tests:
 					echo "FAIL: a forced concurrency of 1 finished in ${serial}ms, under the $(( block_ms * 2 ))ms the two files cost back to back" | tee -a "$1"
 					exit 1
 				fi
-				# Both runs pay the same tsc, esbuild and node startup, and that
-				# cost varies by a few hundred milliseconds between two runs on a
-				# loaded runner. So the bar is HALF a block: overlapping saves a
-				# whole one, running in sequence saves nothing, and the gap
-				# between those two answers is far wider than the noise.
+				# So the bar is HALF a block. Overlapping saves a whole one,
+				# running in sequence saves nothing, and the gap between those
+				# answers is far wider than the noise.
 				if [ "$parallel" -ge $(( serial - block_ms / 2 )) ]; then
 					echo "FAIL: the default run took ${parallel}ms against ${serial}ms serial -- the files still ran one after the other" | tee -a "$1"
 					exit 1
@@ -78,15 +73,14 @@ tests:
 
 	# The same question one level up: a tree of nested projects must not pay for
 	# them one at a time. Each nested project spawns its own tsc and its own
-	# `node --test`, and the recursion awaited each in turn, so a tree of eight
-	# samples paid eight sequential type-checks.
+	# `node --test`. The recursion awaited each in turn, so a tree of samples
+	# paid sequential type-checks.
 	#
-	# The proof is the same wall clock, over two nested projects that each block.
 	# TS0_PROJECT_CONCURRENCY=1 is the negative control: if the recursion goes
 	# back to awaiting each project, the default run costs what the forced one
 	# costs. It also guards the thing concurrency put at risk -- each project's
-	# output is buffered and printed whole, so both headers must still be there
-	# and the two TAP streams must not interleave.
+	# output is buffered and printed whole. Both headers must still be there
+	# and both TAP streams must not interleave.
 	- desc: "nested projects run at the same time, each printed whole"
 	  cmd: bash {inputs.run.sh} {outputs.run.log}
 	  inputs:

@@ -13,8 +13,7 @@ export interface RunOptions {
 	args?: string[];
 	// Specific file to run (overrides entry)
 	file?: string;
-	// Explicit ts0 config file (the --config CLI flag); default: walk up
-	// from the cwd looking for ts0.json.
+	// Explicit ts0 config file (the --config CLI flag); default: walk up from the cwd looking for ts0.json.
 	configPath?: string;
 }
 
@@ -31,11 +30,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 		process.exit(1);
 	}
 
-	// --no-build skips the bundle, NOT the type-check. There must be no path
-	// that runs code which hasn't passed tsc: `node --experimental-strip-types`
-	// only strips type annotations, it does not type-check, so without this gate
-	// `ts0 run --no-build` would happily execute broken code. The build path
-	// (below) type-checks inside build(); this covers the one path that doesn't.
+	// --no-build skips the bundle, NOT the type-check.
 	if (options.noBuild) {
 		const check = await runTypecheck(config, rootDir);
 		if (!check.success) {
@@ -46,7 +41,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
 	}
 
 	// selfOnly on both build() calls below: `ts0 build` and `ts0 test` recurse
-	// into nested ts0 projects, but `run` executes ONE entry, so it builds only
+	// into nested ts0 projects, but `run` executes ONE entry. It builds only
 	// the project that entry belongs to.
 	if (options.file) {
 		// Run specific file
