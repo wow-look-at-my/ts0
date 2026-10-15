@@ -8,6 +8,7 @@ import { loadConfig, type Ts0Config } from "../config.ts";
 import { findNestedProjectDirs, runTypecheck, typecheckExcludeDirs } from "./build.ts";
 import { baseEsbuildOptions } from "./esbuild-base.ts";
 import {
+	annotate,
 	colors,
 	colorizeErrorBlock,
 	colorizeTestLine,
@@ -136,6 +137,10 @@ async function testProject(configPath: string | undefined, patternOverride: stri
 		io.err.write(`${colorizeErrorBlock(check.output)}\n`);
 		return 1;
 	}
+	if (config.test.build !== undefined) {
+		const built = await runTestBuild(config.test.build, rootDir, io);
+		if (built !== 0) return built;
+	}
 	for await (const file of glob(pattern, { cwd: rootDir, exclude: (name) => name === "node_modules" })) {
 		if (!belongsToAnotherProject(file)) testFiles.push(file);
 	}
@@ -184,6 +189,26 @@ async function testProject(configPath: string | undefined, patternOverride: stri
 	} finally {
 		for (const file of compiled.files) rmSync(file.compiled, { force: true });
 	}
+}
+
+// runTestBuild runs the project's `test.build` command once, in rootDir, and
+// resolves with its exit code. Its output goes to the project's sink, so a
+// nested project's build lands inside that project's block. A non-zero exit
+// is reported here; the caller returns it without running any test.
+async function runTestBuild(command: string, rootDir: string, io: Sink): Promise<number> {
+	io.out.write(`Building for tests: ${command}\n`);
+	const child = spawn(command, { shell: true, cwd: rootDir, stdio: ["inherit", "pipe", "pipe"] });
+	pipeColorized(child.stdout, (line) => line, io.out);
+	pipeColorized(child.stderr, (line) => line, io.err);
+	const code = await new Promise<number>((resolve, reject) => {
+		child.on("close", (exit) => resolve(exit ?? 1));
+		child.on("error", reject);
+	});
+	if (code === 0) return 0;
+	const message = `test.build \`${command}\` exited with code ${code}; no tests were run`;
+	annotate("error", message);
+	io.err.write(`${colors().red("Build failed:")} ${message}\n`);
+	return code;
 }
 
 interface CompiledTest {

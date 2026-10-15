@@ -34,6 +34,8 @@ export interface Ts0Config {
 	// Test configuration
 	test: {
 		pattern: string;
+		// Shell command that builds what the tests run against, e.g. "just build" or "ts0 build".
+		build?: string;
 	};
 
 	// HTML entries only: embed runtime-fetched assets (shaders, .hdr, .glb,
@@ -260,6 +262,10 @@ export function loadConfig(configPath?: string): { config: Ts0Config; rootDir: s
 		if (!Array.isArray(config.external) || !config.external.every((s: unknown) => typeof s === "string" && s.length > 0)) {
 			throw new Error("ts0: external must be an array of non-empty import specifiers");
 		}
+	}
+
+	if (config.test.build !== undefined && (typeof config.test.build !== "string" || config.test.build.trim().length === 0)) {
+		throw new Error("ts0: test.build must be a non-empty shell command string");
 	}
 
 	if (config.bundleShared !== undefined && typeof config.bundleShared !== "boolean") {
