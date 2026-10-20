@@ -36,6 +36,10 @@ jobs:
   test:
     needs: build
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    # The dats action fetches the dats binary (and slopfix) with an OIDC token.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
