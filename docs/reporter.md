@@ -11,7 +11,9 @@
 
 ## Why esbuild's own logging is off
 
-`esbuild-base.ts` sets `logLevel: "silent"` in `baseEsbuildOptions()`. Without it, esbuild's Node API returns each error and warning in `result.errors`/`.warnings` AND prints its own colorized copy to the terminal. This was verified directly against the installed esbuild version. Two uncoordinated reports of one diagnostic are worse than one report. ts0's own reporting is the single source of truth. It annotates, and it formats the same as every other target. `build-html.ts`'s inline esbuild calls already set this per call.
+`esbuild-base.ts` sets `logLevel: "silent"` in `baseEsbuildOptions()`. Without it, esbuild's Node API returns each error and warning in `result.errors`/`.warnings` AND prints its own colorized copy to the terminal. This was verified directly against the installed esbuild version. Two uncoordinated reports of one diagnostic are worse than one report. ts0's own reporting is the single source of truth. It annotates, and it formats the same as every other target.
+
+`build-html.ts`'s inline esbuild calls already set this per call.
 
 The shared option covers the other targets, `build.ts`'s default target and `build-js.ts`.
 

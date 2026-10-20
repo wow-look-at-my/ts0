@@ -56,10 +56,7 @@ export interface Ts0Config {
 	// Single-entry target only: re-prepend the entry file's leading comment block.
 	preserveHeader?: boolean;
 
-	// Directories (relative to the config file) to exclude from the type-check
-	// gate, e.g. ["test", "spike"] for trees that type-check under their own
-	// separate tsconfig. node_modules, the output dir, and nested ts0 projects
-	// are always excluded; this adds to that list.
+	// Directories (relative to the config file) to exclude from the type-check gate, e.g. ["test", "spike"] for trees that type-check under their own separate tsconfig.
 	exclude?: string[];
 
 	// Map file extensions to how their imports are loaded, e.g. { ".wgsl": "text" } to import shader files as strings, or { ".png".

@@ -166,7 +166,9 @@ The consequence for this repo: `ts0 build` at the root builds every `samples/*` 
 
 ### Explicit `any` is banned (unconditionally)
 
-`strict` gives `noImplicitAny`. The compiler has **no flag at all** for an *explicit* `any`. ts0 enforces that itself in `commands/explicit-any.ts`, as a second pass inside `runTypecheck()`. The pass runs after tsc. A syntax error is therefore reported as one. Every `any` type annotation is an error: `x: any`, `x as any`, `<any>x`, `any[]`, `Promise<any>`, `type A = any`. There is **no config option and no escape hatch**.
+`strict` gives `noImplicitAny`. The compiler has **no flag at all** for an *explicit* `any`. ts0 enforces that itself in `commands/explicit-any.ts`, as a second pass inside `runTypecheck()`. The pass runs after tsc. A syntax error is therefore reported as one. Every `any` type annotation is an error: `x: any`, `x as any`, `<any>x`, `any[]`, `Promise<any>`, `type A = any`.
+
+There is **no config option and no escape hatch**.
 
 The ban applies even with `"strict": false`, exactly like the gate itself. This pass too skips a directory in `exclude`, from the same exclusion list as the gate.
 
@@ -253,7 +255,9 @@ The motivating case is a CSS module script, `import s from "./x.css" with { type
 - Matching is by specifier as written, not by resolved file path: `"./styles.css"`, `"lit"`, or `"*.css"` with `*` matching any run of characters.
 - An external import is still type-checked. The sample pairs one with an ambient `declare module "*.css"`.
 
-Type-checking for this target uses `moduleResolution: "Bundler"`. See "Type-checking" above. For a loader-backed import, such as `.wgsl` as text, set the loader with the `loaders` config field, `{ ".wgsl": "text" }`, which `baseEsbuildOptions` threads into esbuild. Give an ambient `declare module "*.wgsl"`. Do this so the import also type-checks. esbuild does the actual inlining. ts0 applies no loaders by default. The `esbuild.loader` escape hatch still works, and overrides `loaders`.
+Type-checking for this target uses `moduleResolution: "Bundler"`. See "Type-checking" above. For a loader-backed import, such as `.wgsl` as text, set the loader with the `loaders` config field, `{ ".wgsl": "text" }`, which `baseEsbuildOptions` threads into esbuild. Give an ambient `declare module "*.wgsl"`. Do this so the import also type-checks. esbuild does the actual inlining. ts0 applies no loaders by default.
+
+The `esbuild.loader` escape hatch still works, and overrides `loaders`.
 
 ### Declaration emit (js target only)
 

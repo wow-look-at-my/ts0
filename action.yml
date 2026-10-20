@@ -19,7 +19,7 @@ runs:
     # Optional inputs omitted on purpose: ts0 is a build tool, so CI tracks latest.
     - name: Download ts0
       id: download
-      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
       with:
         project: ts0
 
