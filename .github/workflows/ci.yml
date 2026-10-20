@@ -36,6 +36,12 @@ jobs:
   test:
     needs: build
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    # dats downloads slopfix through buildhost, which authenticates with a GitHub OIDC token.
+    permissions:
+      contents: read
+      id-token: write
+      actions: write
+      checks: read
     steps:
       - uses: actions/checkout@v4
 

@@ -98,7 +98,9 @@ tests:
 				compiled=(src/*.ts0.*)
 				if [ "${#compiled[@]}" -ne 0 ]; then echo "FAIL: tests were compiled after the build failed: ${compiled[*]}"; exit 1; fi
 				grep -q 'BUILD BROKE' "$1" || { echo "FAIL: the build's own output was not shown"; exit 1; }
-				grep -q 'Build failed: test.build `bash build.sh` exited with code 3; no tests were run' "$1" || { echo "FAIL: no build failure message"; exit 1; }
+				# The message is colorized under GitHub Actions, so a reset sequence sits
+				# between the header and the detail: match across it, then check the tail.
+				grep -q 'Build failed:.*test.build `bash build.sh` exited with code 3; no tests were run' "$1" || { echo "FAIL: no build failure message"; exit 1; }
 				echo "test.build failure OK: ts0 test failed before any test"
 	  outputs:
 		stdout:

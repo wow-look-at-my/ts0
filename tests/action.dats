@@ -28,17 +28,20 @@ tests:
 
 				# Both commands run, and test comes first: it is the gate
 				# (type-check + the explicit-any ban) and build emits after it.
-				test_line="$(grep -n 'node "\$TS0" test' "$action" | cut -d: -f1)"
-				build_line="$(grep -n 'node "\$TS0" build' "$action" | cut -d: -f1)"
+				test_line="$(grep -nE 'node "\$\{\{ steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+ \}\}" test' "$action" | cut -d: -f1)"
+				build_line="$(grep -nE 'node "\$\{\{ steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+ \}\}" build' "$action" | cut -d: -f1)"
 				[ -n "$test_line" ] || { say "the action never runs ts0 test" "$1"; exit 1; }
 				[ -n "$build_line" ] || { say "the action never runs ts0 build" "$1"; exit 1; }
 				[ "$test_line" -lt "$build_line" ] || { say "build runs before test" "$1"; exit 1; }
 
-				# A caller value substituted into the command line is how a
-				# command input comes back. No line that invokes node may
-				# carry an expression at all.
-				if grep -nE '^[^#]*node .*\$\{\{' "$action"; then
-					say "a node command line interpolates an expression" "$1"
+				# A caller value on the command line is how a command input comes back.
+				# So the only expression a node line may carry is a step's own output.
+				if grep -nE '^[^#]*node .*\$\{\{' "$action" | grep -vE '\$\{\{ *steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+ *\}\}'; then
+					say "a node command line interpolates something other than a step output" "$1"
+					exit 1
+				fi
+				if grep -nE '^[^#]*node .*\$\{\{ *(inputs|env|vars|github|matrix|needs)\.' "$action"; then
+					say "a node command line interpolates a caller-supplied value" "$1"
 					exit 1
 				fi
 
