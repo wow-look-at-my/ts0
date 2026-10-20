@@ -14,8 +14,8 @@ import {
 } from "./reporter.ts";
 import { PassThrough } from "node:stream";
 
-// withEnv runs `fn` with the given env vars set (or deleted, for `undefined`),
-// restoring the previous values afterward even if `fn` throws.
+// withEnv runs `fn` with the given env vars set (or deleted, for
+// `undefined`), restoring the values afterward even if `fn` throws.
 function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
 	const prev: Record<string, string | undefined> = {};
 	for (const k of Object.keys(vars)) prev[k] = process.env[k];
@@ -124,8 +124,7 @@ test("formatEsbuildDiagnostic recasts a located message, and passes an unlocated
 test("colorizeErrorBlock highlights a diagnostic line's marker without breaking its code token", () => {
 	withEnv({ GITHUB_ACTIONS: undefined, NO_COLOR: undefined, FORCE_COLOR: "1" }, () => {
 		const out = colorizeErrorBlock("src/a.ts(3,7): error TS2322: nope");
-		// The digits of the diagnostic code must stay contiguous -- anything
-		// that greps for "TS2322" (dats, other unit tests) must still find it.
+		// The digits of the diagnostic code must stay contiguous -- anything that greps for "TS2322".
 		assert.match(out, /TS2322/);
 		assert.equal(out.includes("\x1b[91merror TS2322:\x1b[0m"), true);
 	});

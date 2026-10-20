@@ -127,8 +127,7 @@ async function main() {
 			await run({
 				file,
 				noBuild: hasFlag("no-build"),
-				// Positionals after the file are the program's own arguments
-				// (option values like `--config x.json` are never leaked here).
+				// Positionals after the file are the program's own arguments (option values like `--config x.json` are never leaked here).
 				args: positionals.slice(1),
 				configPath: getOption("config"),
 			});

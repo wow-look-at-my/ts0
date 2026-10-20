@@ -1,18 +1,11 @@
 // GitHub Actions log annotations and ANSI coloring for ts0's own console
 // output: type-check/esbuild diagnostics and `node --test`'s TAP stream.
-// Colors and `::error::`/`::warning::` annotations are two independent
-// features layered on the same diagnostics -- annotations put a finding in
-// GitHub's Files-changed/Checks UI; colors make the raw log readable, in a
-// terminal or in the Actions log viewer (which renders ANSI same as a
-// terminal, despite its stdout being a pipe, not a TTY).
 
 export function isGithubActions(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env.GITHUB_ACTIONS === "true";
 }
 
-// colorEnabled forces color on under GitHub Actions (see module comment --
-// its stdout is never a TTY, so a bare isTTY check would leave every CI run
-// uncolored) and otherwise follows the stream's own TTY-ness, with the usual
+// colorEnabled forces color on under GitHub Actions (see module comment -- its stdout is never a TTY, so a bare isTTY check would leave every CI run uncolored) and otherwise follows the stream's own TTY-ness, with the usual
 // NO_COLOR/FORCE_COLOR opt-outs taking precedence over both.
 export function colorEnabled(stream: NodeJS.WriteStream = process.stdout): boolean {
 	if (process.env.NO_COLOR) return false;
@@ -41,8 +34,8 @@ export interface Colors {
 	dimYellow(text: string): string;
 }
 
-// colors() is derived fresh on every call rather than cached at module load,
-// so it always reflects the current environment -- tests exercise both the
+// colors() is derived fresh on every call rather than cached at module load.
+// It always reflects the current environment -- tests exercise both the
 // enabled and disabled branches in one process.
 export function colors(enabled: boolean = colorEnabled()): Colors {
 	const wrap =
@@ -114,11 +107,9 @@ export interface EsbuildLikeMessage {
 }
 
 // formatEsbuildDiagnostic recasts an esbuild Message into the same tsc-style
-// shape formatDiagnostic produces, so the one diagnostic parser below
+// shape formatDiagnostic produces. The diagnostic parser below
 // (colorizeErrorBlock, and the GitHub annotations it emits) covers esbuild's
-// errors and warnings too, not just tsc's. A message with no location (esbuild
-// reports some errors that way) has nothing to recast -- its plain text passes
-// through unchanged.
+// errors and warnings too, not tsc's.
 export function formatEsbuildDiagnostic(msg: EsbuildLikeMessage, severity: "error" | "warning" = "error"): string {
 	if (!msg.location) return msg.text;
 	return formatDiagnostic(msg.location.file, msg.location.line, msg.location.column, severity, msg.text);
@@ -126,15 +117,15 @@ export function formatEsbuildDiagnostic(msg: EsbuildLikeMessage, severity: "erro
 
 const DIAGNOSTIC_RE = /^(.+?)\((\d+),(\d+)\): (error|warning)(\s+TS\d+)?: (.*)$/;
 
-// colorizeErrorBlock recolors a block of ts0 error/warning text for a
-// terminal and, on GitHub Actions, emits one annotation per diagnostic line --
-// the only shape ts0 knows how to point at a file and location. A line
-// matching that shape gets its location dim and its "error"/"warning TSxxxx"
-// marker bright, in the marker's own severity color (a warning line is
-// yellow even inside an otherwise-red error block). Any other non-blank line
-// -- a header like "Type-checking failed:", a message with no location -- is
-// colored solid in `fallbackSeverity`'s bright color: there's nothing more
-// specific in it to highlight, so the whole line carries the signal.
+// colorizeErrorBlock recolors a block of ts0 error/warning text for a terminal
+// and, on GitHub Actions, emits one annotation per diagnostic line. The only
+// shape ts0 knows how to point at a file and location. A line matching that
+// shape gets its location dim and its "error"/"warning TSxxxx" marker bright,
+// in the marker's own severity color (a warning line is yellow even inside an
+// otherwise-red error block). Any other non-blank line -- a header like
+// "Type-checking failed:", a message with no location. It is colored solid in
+// `fallbackSeverity`'s bright color: there's nothing more specific in it to
+// highlight. The whole line carries the signal.
 export function colorizeErrorBlock(text: string, fallbackSeverity: "error" | "warning" = "error"): string {
 	const c = colors();
 	return text
@@ -156,20 +147,14 @@ export function colorizeErrorBlock(text: string, fallbackSeverity: "error" | "wa
 
 // --- `node --test` TAP output -----------------------------------------------
 
-// colorizeTestLine recolors one line of `node --test`'s TAP output.
-//   - "ok N - ..." (a pass): only the "ok" token turns green. Coloring the
-//     whole line would drown out anything that actually needs attention once
-//     a suite has hundreds of passes.
-//   - "not ok N - ..." (a failure): "not ok" turns bright red, the rest of the
-//     line dim red, and it is reported as a GitHub Actions error annotation
-//     (a no-op outside Actions) -- a TAP line carries no file/line ts0 could
-//     point at instead.
-//   - "# fail N" with N > 0 (the run's own summary): colored solid red. Unlike
-//     a per-test line this IS the overall result, the one case allowed to
-//     color a whole line for something other than overall success.
-//   - anything mentioning "warning": colored solid yellow.
-// Everything else (the TAP version line, "# pass N", indentation-only lines)
-// passes through unchanged.
+// colorizeTestLine recolors one line of `node --test`'s TAP output. - "ok N -
+// ..." (a pass): only the "ok" token turns green. Coloring the whole line
+// would drown out anything that needs attention once a suite has hundreds of
+// passes. - "not ok N - ..." (a failure): "not ok" turns bright red, the rest
+// of the line dim red. It is reported as a GitHub Actions error annotation (a
+// no-op outside Actions) -- a TAP line carries no file/line ts0 could point
+// at instead. This is "# fail N" with N > 0 (the run's own summary): colored
+// solid red.
 export function colorizeTestLine(line: string): string {
 	const c = colors();
 	const notOk = /^(\s*)not ok\b(.*)$/.exec(line);
@@ -190,13 +175,7 @@ export function colorizeTestLine(line: string): string {
 }
 
 // pipeColorized streams `readable` to `out` line by line, recoloring each
-// complete line with `colorizeLine`. Used to recolor a spawned child's output
-// live: `stdio: "inherit"` hands the fd straight to the terminal, bypassing
-// ts0 entirely, so nothing written that way could ever be recolored.
-// A destination for already-formatted text. `process.stdout` is one. So is an
-// in-memory buffer that holds a nested project's output until it can be
-// printed whole, which is what `ts0 test` uses to run projects at the same
-// time without interleaving two TAP streams.
+// complete line with `colorizeLine`.
 export interface LineSink {
 	write(text: string): void;
 }

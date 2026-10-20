@@ -6,10 +6,8 @@ import type { Ts0Config } from "../config.ts";
 import type { BuildResult } from "./build.ts";
 import { formatEsbuildDiagnostic } from "../reporter.ts";
 
-// Loaders applied when bundling CSS, so that url(./fonts/foo.woff2) and
-// url(./img/bar.png) get embedded as data: URLs instead of left as relative
-// paths that 404 in a single-file bundle. esbuild walks the imported CSS
-// graph and rewrites these references in the output.
+// esbuild walks the imported CSS graph and rewrites these references in the
+// output.
 const CSS_ASSET_LOADERS: Record<string, esbuild.Loader> = {
 	".css": "css",
 	".woff2": "dataurl",
@@ -26,14 +24,6 @@ const CSS_ASSET_LOADERS: Record<string, esbuild.Loader> = {
 };
 
 // Extensions whose contents we'll embed for the runtime fetch interceptor.
-// Text assets are inlined as JSON strings; binary assets as data: URLs that
-// the browser decodes back into an ArrayBuffer when the interceptor's
-// fall-through fetch hits them.
-//
-// .json is intentionally NOT here: it's a common config-file extension
-// (ts0.json, package.json) and embedding those is never desired. Users
-// fetching runtime JSON should either rename the extension or use
-// esbuild's import-assertion JSON loader from JS code.
 const TEXT_ASSET_EXTS = new Set([".glsl", ".wgsl", ".vert", ".frag", ".txt", ".xml"]);
 const BINARY_ASSET_EXTS = new Set([".hdr", ".glb", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bin"]);
 
@@ -48,7 +38,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	".bin": "application/octet-stream",
 };
 
-// Two candidate locations for the runtime template:
+// Candidate locations for the runtime template:
 //   - src/commands/build-html.ts → ../runtime/fetch-interceptor.js (running
 //     from source, via --experimental-strip-types)
 //   - dist/ts0 → ../src/runtime/fetch-interceptor.js (running from the
@@ -95,10 +85,7 @@ export async function buildHtml(
 
 	const buildOnce = async (): Promise<{ errors: string[]; outputs: string[] }> => {
 		// In watch mode build() can't gate up front (later rebuilds would slip
-		// past), so it hands us the type-check to run before each rebuild. If it
-		// fails we report the errors and write nothing -- the previous good
-		// output stays in place. Non-watch builds are already gated by build()
-		// and pass no typecheck here.
+		// past), so it hands us the type-check to run before each rebuild.
 		if (options?.typecheck) {
 			const check = await options.typecheck();
 			if (!check.success) {
@@ -107,9 +94,7 @@ export async function buildHtml(
 		}
 		const html = readFileSync(htmlPath, "utf-8");
 		const result = await processHtml(html, htmlSourceDir, rootDir, config, dirname(outFile));
-		// Nothing is written when the pass had errors: a new HTML pointing at
-		// bundles that were never emitted (or stale bundles beside a new shell)
-		// is worse than leaving the previous good output in place.
+		// Nothing is written when the pass had errors.
 		if (result.errors.length) return { errors: result.errors, outputs: [] };
 		for (const asset of result.assets) {
 			mkdirSync(dirname(asset.path), { recursive: true });
@@ -194,14 +179,12 @@ interface EmittedAsset {
 interface ProcessResult {
 	html: string;
 	errors: string[];
-	// Files the caller must write alongside the HTML. Always empty in inline
-	// mode (inlineAssets defaults to true).
+	// Files the caller must write alongside the HTML. Always empty in inline mode (inlineAssets defaults to true).
 	assets: EmittedAsset[];
 }
 
 // Output basename for a referenced source: its own basename with the bundled
-// extension (src/main.ts -> main.js). Deterministic and hash-free -- the
-// serving side owns cache headers and ETags.
+// extension (src/main.ts -> main.js).
 function assetOutputName(sourcePath: string, ext: string): string {
 	return basename(sourcePath).replace(/\.[^.]*$/, "") + ext;
 }
@@ -217,17 +200,12 @@ async function processHtml(
 	const replacements: Array<{ match: string; replacement: string }> = [];
 	const assets: EmittedAsset[] = [];
 
-	// Referenced mode: every referenced script/stylesheet is bundled to its own
-	// file under assetPath and the tag keeps pointing at it. assetPath is the
-	// URL prefix verbatim; the same string without a leading `/` or `./` is the
-	// subdirectory under the HTML's output directory.
+	// Referenced mode.
 	const referenced = config.inlineAssets === false;
 	const assetUrlPrefix = (config.assetPath ?? "assets").replace(/\/+$/, "");
 	const assetDir = resolve(outDir, assetUrlPrefix.replace(/^(?:\.?\/)+/, ""));
 
-	// Output path -> the source that claimed it. Two sources with the same
-	// basename want the same output file; that is an error naming both, never a
-	// silent overwrite and never an invented suffix.
+	// Output path -> the source that claimed it.
 	const assetOwners = new Map<string, string>();
 	const claimAsset = (name: string, source: string): string | null => {
 		const path = join(assetDir, name);
@@ -241,9 +219,8 @@ async function processHtml(
 		assetOwners.set(path, source);
 		return path;
 	};
-	// Every output file, not just the first: an entry that imports CSS makes
-	// esbuild emit a companion .css beside the JS, and dropping it ships an
-	// unstyled page.
+	// Every output file, not the first: an entry that imports CSS makes esbuild
+	// emit a companion .css beside the JS. Dropping it ships an unstyled page.
 	const collectOutputs = (files: esbuild.OutputFile[] | undefined, source: string): void => {
 		for (const file of files ?? []) {
 			const owner = assetOwners.get(file.path);
@@ -258,12 +235,6 @@ async function processHtml(
 		}
 	};
 
-	// <script ...>...</script> — three cases handled below:
-	//   1. <script src="local.js"> — bundle the file at src.
-	//   2. <script type="module">...inline code...</script> — bundle the
-	//      inline body via esbuild stdin so relative imports resolve.
-	//   3. <script src="https://..."> or inline classic <script> — leave
-	//      alone. (Classic inline scripts already work as-is in a bundle.)
 	const scriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 	for (const match of html.matchAll(scriptRe)) {
 		const [fullMatch, attrStr, inlineBody] = match;
@@ -279,11 +250,7 @@ async function processHtml(
 			target: "esnext",
 			write: false,
 			logLevel: "silent",
-			// JSX support (esbuild). Without this an .tsx/.jsx script entry
-			// falls back to esbuild's default classic transform
-			// (React.createElement), which breaks Preact/automatic-runtime
-			// projects with "React is not defined". Threaded before the
-			// escape hatch so an explicit esbuild.jsx can still override it.
+			// JSX support (esbuild).
 			...(config.jsx && { jsx: config.jsx }),
 			...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
 		};
@@ -296,10 +263,7 @@ async function processHtml(
 			buildOpts.entryPoints = [entryDescription];
 			if (referenced) {
 				referencedName = assetOutputName(entryDescription, ".js");
-				// esbuild is told the real output path rather than being asked
-				// for bytes we place ourselves: companion files (a .css emitted
-				// for an entry that imports CSS) are only named correctly when
-				// it knows where the entry lands.
+				// esbuild is told the real output path rather than being asked for bytes we place ourselves: companion files.
 				const outPath = claimAsset(referencedName, entryDescription);
 				if (!outPath) continue;
 				buildOpts.outfile = outPath;
@@ -414,14 +378,7 @@ async function processHtml(
 		}
 	}
 
-	// Bookmarklet links: an href of the form `javascript:<local source file>`
-	// (e.g. <a href="javascript:./src/tool.ts">) gets the referenced file
-	// bundled and substituted in as a real bookmarklet URL --
-	// `javascript:` + the percent-encoded bundle. Only hrefs whose remainder
-	// ends in a bundleable source extension are treated as file references;
-	// actual inline JavaScript hrefs (javascript:void(0), ...) are left
-	// untouched. The bundle is always minified regardless of config.minify: a
-	// bookmarklet is a URL, and its length is the constraint that matters.
+	// Bookmarklet links: an href of the form `javascript:<local source file>` (e.g. <a href="javascript:./src/tool.ts">) gets the referenced file bundled and substituted in as a real bookmarklet URL.
 	const bookmarkletSrcRe = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;
 	const bookmarkletRe = /(href\s*=\s*)(["'])javascript:([^"']+)\2/gi;
 	for (const match of html.matchAll(bookmarkletRe)) {
@@ -562,9 +519,7 @@ function collectAssetsFromDirs(rootDir: string, assetDirs: string[]): AssetMap {
 
 function injectFetchInterceptor(html: string, assets: AssetMap): string {
 	const template = readFileSync(resolveInterceptorPath(), "utf-8");
-	// Defensively escape sequences that could end the host <script> tag if
-	// a shader or other asset ever contained them. JSON's escaped forward
-	// slash is legal everywhere, so this stays valid JS.
+	// Defensively escape sequences that could end the host <script> tag if a shader or other asset ever contained them.
 	const payload = JSON.stringify(assets).replace(/<\//g, "<\\/").replace(/<!--/g, "<\\!--");
 	const script = `<script>\n${template.replaceAll("__ASSETS_JSON__", payload)}</script>\n`;
 
@@ -573,8 +528,7 @@ function injectFetchInterceptor(html: string, assets: AssetMap): string {
 		const insertAt = headOpen.index + headOpen[0].length;
 		return html.slice(0, insertAt) + "\n" + script + html.slice(insertAt);
 	}
-	// No <head>? Prepend at the top so it still installs before any other
-	// script runs.
+	// No <head>? Prepend at the top so it still installs before any other script runs.
 	return script + html;
 }
 
@@ -614,8 +568,7 @@ function escapeForStyle(css: string): string {
 }
 
 // Same tsc-style shape formatEsbuildDiagnostic produces for the other
-// targets, so reporter.ts's colorizeErrorBlock can find a file/line to
-// annotate in an HTML build's errors too, not just the default target's.
+// targets.
 function formatEsbuildMessage(msg: esbuild.Message): string {
 	return formatEsbuildDiagnostic(msg, "error");
 }
