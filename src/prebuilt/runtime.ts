@@ -1,9 +1,5 @@
 // Runtime support for the prebuilt ts0.cjs bundle (see src/prebuilt/main.ts
-// and scripts/build-prebuilt.ts). Everything here must work when the bundle
-// is piped into `node -` as well as run from a saved file: NOTHING may
-// depend on the bundle's own location (__filename is "[stdin]" under a
-// pipe), so all paths derive from the cache directory -- $TS0_CACHE_DIR or
-// ~/.cache/ts0 -- plus constants baked into the bundle at package time.
+// and scripts/build-prebuilt.ts).
 
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,20 +25,20 @@ function cacheRoot(): string {
 	return join(homedir(), ".cache", "ts0");
 }
 
-// prepareCache extracts the embedded files (the pruned typescript package
-// and the interceptor template) into <cacheRoot>/<buildId>/ in an
-// installed-ts0 layout, then points the bundle's module resolution there:
-// the packaging script rewrites every `import.meta.url` in the bundle to
+// prepareCache extracts the embedded files (the pruned typescript package and
+// the interceptor template) into <cacheRoot>/<buildId>/ in an installed-ts0
+// layout, then points the bundle's module resolution there. The packaging
+// script rewrites every `import.meta.url` in the bundle to
 // `globalThis.__ts0PrebuiltImportMetaUrl`, which is set here to
-// <dir>/dist/ts0 -- so build.ts's createRequire(...).resolve("typescript/
-// bin/tsc") finds <dir>/node_modules/typescript, and build-html.ts's
-// ../src/runtime/fetch-interceptor.js candidate finds the extracted
-// template, with no source changes.
+// <dir>/dist/ts0. So build.ts's createRequire(...).resolve("typescript/
+// bin/tsc") finds <dir>/node_modules/typescript. Build-html.ts's
+// ../src/runtime/fetch-interceptor.js candidate finds the extracted template,
+// with no source changes.
 //
-// Extraction is atomic (write a temp sibling, rename into place); a crashed
+// Extraction is atomic (write a temp sibling, rename into place). A crashed
 // or concurrent extraction can never yield a half-populated directory that
-// later runs would trust, and the rename loser of a race just uses the
-// winner's directory.
+// later runs would trust. The rename loser of a race uses the winner's
+// directory.
 export function prepareCache(assets: PrebuiltAssets): string {
 	const root = cacheRoot();
 	const dir = join(root, assets.buildId);
@@ -94,15 +90,7 @@ function platformKeys(): { os: string; arch: string } {
 }
 
 // ensureEsbuildBinary makes esbuild's platform-native binary available and
-// points the bundled esbuild JS API at it via ESBUILD_BINARY_PATH. The
-// binary is the ONE piece of ts0 that cannot live inside a platform-neutral
-// ts0.cjs; it is fetched once from buildhost (a ~11 MB sibling artifact of
-// this release, byte-identical to the npm registry's @esbuild package) into
-// the cache, atomically, and reused forever after.
-//
-// MUST complete before the CLI (and therefore the esbuild module) loads:
-// esbuild's JS API snapshots process.env.ESBUILD_BINARY_PATH at module load
-// time, and with the API bundled there is no node_modules fallback.
+// points the bundled esbuild JS API at it via ESBUILD_BINARY_PATH.
 export async function ensureEsbuildBinary(assets: PrebuiltAssets, cacheDir: string): Promise<void> {
 	const existing = process.env.ESBUILD_BINARY_PATH;
 	if (existing && existing.length > 0 && existsSync(existing)) {
@@ -193,8 +181,7 @@ async function downloadEsbuild(assets: PrebuiltAssets, bin: string): Promise<voi
 		try {
 			renameSync(tmp, bin);
 		} catch (err) {
-			// Lost a concurrent-download race: the winner's binary is in
-			// place and equally good.
+			// Lost a concurrent-download race: the winner's binary is in place and equally good.
 			if (!existsSync(bin)) throw err;
 		}
 	} finally {
