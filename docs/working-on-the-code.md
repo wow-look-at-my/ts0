@@ -2,7 +2,7 @@
 
 ```sh
 npm install
-npm run build                                       # build dist/ts0
+just build                                          # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
 npm link && dats test tests/                        # behavioural suites (needs bwrap)
 ```
