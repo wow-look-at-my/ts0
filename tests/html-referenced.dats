@@ -1,13 +1,14 @@
 # `"inlineAssets": false` on an HTML entry emits a multi-file static site
-# instead of one inlined document: each referenced local script/stylesheet is
+# instead of one inlined document. Each referenced local script/stylesheet is
 # bundled to its own file under `assetPath`, and the tag keeps referencing it.
 # This suite builds samples/html-referenced with the linked `ts0` and asserts
-# the shape of what lands on disk -- that nothing was inlined, that the
-# references point at assetPath, that the bundles are real bundles, and that
-# two sources competing for one output name fail the build with nothing
-# written. See CLAUDE.md, "Referenced assets (inlineAssets: false)".
+# the shape of what lands on disk -- that nothing was inlined. That `ts0` is
+# that the references point at assetPath. Those is are that the bundles are
+# real bundles, and that sources competing for one output name fail the build
+# with nothing written. See CLAUDE.md, "Referenced assets (inlineAssets:
+# false)".
 #
-# The sample is copied into the test's own directory before building: the
+# The sample is copied into the test's own directory before building. The
 # repo is bind-mounted read-only in the sandbox, and outputs.files addresses
 # paths under that directory. No network: a build must never need one.
 sandbox:
