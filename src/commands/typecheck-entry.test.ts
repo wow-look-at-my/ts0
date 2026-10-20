@@ -1,14 +1,4 @@
 // Regression test for the type-check gate's file set.
-//
-// The gate's tsconfig `include` is `**/*.ts` (+ the other TS extensions), and
-// tsc never descends into a dot-directory while expanding a leading wildcard.
-// So an entry under one -- a build script in `.github/scripts/` -- used to be
-// bundled by esbuild against an EMPTY type-check program, and the build
-// reported success: a green build over a file that was never checked at all.
-//
-// These tests drive `runTypecheck` over a real temp project and assert the
-// gate fails on a type error in the entry, whether or not the entry sits in a
-// dot-directory, and that a clean entry still passes.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -54,9 +44,9 @@ for (const entry of [".github/scripts/build-step.ts", "scripts/build-step.ts"]) 
 }
 
 // Naming the entry in `include` must not make tsc the thing that reports an
-// entry holding no TypeScript. Globs matching nothing abort with TS18003
-// naming ts0's temp tsconfig; the gate has to stay a vacuous pass here so the
-// js target's own "No TypeScript modules found under ..." is what the user sees.
+// entry holding no TypeScript. Globs matching nothing abort with TS18003 naming
+// ts0's temp tsconfig. The gate has to stay a vacuous pass here so the js
+// target's own "No TypeScript modules found under ..." is what the user sees.
 test("a JS-only directory entry stays a vacuous pass", async () => {
 	const { root, config } = project("lib/a.js", "export const a = 1;\n");
 	config.entry = "lib";
