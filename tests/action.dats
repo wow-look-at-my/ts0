@@ -28,17 +28,21 @@ tests:
 
 				# Both commands run, and test comes first: it is the gate
 				# (type-check + the explicit-any ban) and build emits after it.
-				test_line="$(grep -n 'node "\$TS0" test' "$action" | cut -d: -f1)"
-				build_line="$(grep -n 'node "\$TS0" build' "$action" | cut -d: -f1)"
-				[ -n "$test_line" ] || { say "the action never runs ts0 test" "$1"; exit 1; }
-				[ -n "$build_line" ] || { say "the action never runs ts0 build" "$1"; exit 1; }
-				[ "$test_line" -lt "$build_line" ] || { say "build runs before test" "$1"; exit 1; }
+				commands="$(sed -n 's|^[[:space:]]*run: node "[^"]*" \(.*\)$|\1|p' "$action")"
+				[ "$(printf '%s\n' "$commands" | wc -l)" -eq 2 ] || {
+					say "expected exactly two node command lines, got: $commands" "$1"
+					exit 1
+				}
+				[ "$(printf '%s\n' "$commands" | sed -n 1p)" = "test" ] || { say "the first node run is not ts0 test" "$1"; exit 1; }
+				[ "$(printf '%s\n' "$commands" | sed -n 2p)" = "build" ] || { say "the second node run is not ts0 build" "$1"; exit 1; }
 
 				# A caller value substituted into the command line is how a
-				# command input comes back. No line that invokes node may
-				# carry an expression at all.
-				if grep -nE '^[^#]*node .*\$\{\{' "$action"; then
-					say "a node command line interpolates an expression" "$1"
+				# command input comes back. slopfix's yaml/env-indirection rule
+				# bans the `env: TS0:` hop that once kept the download path off
+				# this line. So the one expression allowed on a node line is
+				# that path, and the command itself stays a literal.
+				if grep -nE '^[^#]*node ' "$action" | grep -vF 'node "${{ steps.download.outputs.path }}" '; then
+					say "a node command line carries something other than the download path" "$1"
 					exit 1
 				fi
 
