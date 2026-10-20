@@ -1,18 +1,13 @@
 // Installed at the top of every single-file ts0 HTML bundle that has
 // embeddable assets. Any fetch() the page makes for one of those assets is
-// served from the embedded ASSETS map instead of going to the network, so
-// code like
-//
-//     fetch(new URL("shaders/scene.wgsl", import.meta.url))
-//
-// keeps working when the bundle is opened from disk (file://) with no
-// asset tree alongside it.
-//
-// The bundler substitutes the literal token at the const-assignment line
-// below with the JSON-encoded { text, binary } map collected from the
-// entry's directory. Binary assets are pre-encoded as data: URLs and
-// handed back to the underlying fetch so the browser does the base64
-// decode into a real ArrayBuffer.
+// served from the embedded ASSETS map instead of going to the network. Code
+// like fetch(new URL("shaders/scene.wgsl", import.meta.url)) keeps working
+// when the bundle is opened from disk (file://) with no asset tree alongside
+// it. The bundler substitutes the literal token at the const-assignment line
+// below with the JSON-encoded { text, binary } map collected from the entry's
+// directory. A binary asset is pre-encoded as a data URL. It is handed back to
+// the underlying fetch, so the browser decodes the base64 into the response
+// body.
 (function () {
 	const ASSETS = __ASSETS_JSON__;
 	window.__ts0_embedded_paths__ = [].concat(Object.keys(ASSETS.text), Object.keys(ASSETS.binary));
@@ -29,8 +24,7 @@
 	}
 
 	window.fetch = function (input, init) {
-		// input may be a string, a URL (the documented `fetch(new URL(...))`
-		// form -- URL exposes .href, not .url), or a Request (.url).
+		// input may be a string, a URL (the documented `fetch(new URL(...))` form -- URL exposes .href, not .url), or a Request.
 		const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input && input.url) || "";
 		let pathname;
 		try {

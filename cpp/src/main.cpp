@@ -1,5 +1,4 @@
-// ts0 - Simple TypeScript framework with good defaults
-// C++20 port
+// ts0 - Simple TypeScript framework with good defaults C++20 port
 
 #include "commands/init.hpp"
 #include "commands/build.hpp"

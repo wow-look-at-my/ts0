@@ -12,9 +12,13 @@ on:
       - 'cpp/**'
       - '.github/workflows/cpp.yml'
 
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,7 +72,7 @@ jobs:
 
   test-linux:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -91,6 +95,7 @@ jobs:
 
   test-macos:
     needs: build
+    if: github.event.repository.visibility == 'public'
     runs-on: macos-latest
     steps:
       - name: Download artifact
@@ -114,6 +119,7 @@ jobs:
 
   test-windows:
     needs: build
+    if: github.event.repository.visibility == 'public'
     runs-on: windows-latest
     steps:
       - name: Download artifact

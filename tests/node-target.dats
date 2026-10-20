@@ -1,5 +1,5 @@
-# What a Node-target project needs from ts0, beyond compiling: an artifact that
-# runs where its node_modules does not exist, and a test run that executes the
+# What a Node-target project needs from ts0, beyond compiling. An artifact that
+# runs where its node_modules does not exist. A test run that executes the
 # sources in the module format they were written in.
 #
 # Both are regressions from wow-look-at-my/actions, where every action is a
@@ -106,7 +106,7 @@ tests:
 			# type annotations without turning `import` into `require`, so the
 			# whole file died on "Cannot use import statement outside a module".
 			# __dirname, require and require.main are the globals this format
-			# has, and a compile into ESM would take all three away.
+			# has, and a compile into ESM would take all of them away.
 			# require.main === module FIRES inside a module under test, because
 			# ts0 compiles one test file into one bundle and one bundle is one
 			# module. A `if (require.main === module)` block that a reader

@@ -70,7 +70,6 @@ inline std::vector<fs::path> find(const fs::path& dir, const std::string& patter
             }
         }
     } catch (const fs::filesystem_error&) {
-        // Ignore permission errors
     }
 
     return results;
