@@ -37,9 +37,13 @@ runs:
     - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: node "${{ steps.download.outputs.path }}" test
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" test
 
     - name: ts0 build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: node "${{ steps.download.outputs.path }}" build
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" build
