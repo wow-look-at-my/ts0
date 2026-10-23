@@ -27,9 +27,10 @@ runs:
     - name: Put ts0 on PATH
       shell: bash
       run: |
+        TS0="${{ steps.download.outputs.path }}"
         dir="$RUNNER_TEMP/ts0-bin"
         mkdir -p "$dir"
-        cp "${{ steps.download.outputs.path }}" "$dir/ts0.cjs"
+        cp "$TS0" "$dir/ts0.cjs"
         cp "$GITHUB_ACTION_PATH/bin/ts0" "$dir/ts0"
         echo "$dir" >> "$GITHUB_PATH"
 
@@ -37,9 +38,13 @@ runs:
     - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: node "${{ steps.download.outputs.path }}" test
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" test
 
     - name: ts0 build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: node "${{ steps.download.outputs.path }}" build
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" build
