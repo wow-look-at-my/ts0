@@ -1,10 +1,9 @@
 # Every sample under samples/ built with the linked `ts0`, asserting what each
-# target actually writes. This covers the single-file HTML inliner, HTML+JSX
-# through the automatic runtime, the js library target (dedup, loaders,
-# declarations, determinism), userscript header preservation, and bookmarklet
-# href bundling.
+# target actually writes: the single-file HTML inliner, HTML+JSX through the
+# automatic runtime, the js library target (dedup, loaders, declarations,
+# determinism), userscript header preservation, and bookmarklet href bundling.
 #
-# Each test stages its sample into the test's own directory. The repo is
+# Each test stages its sample into the test's own directory: the repo is
 # bind-mounted read-only in the sandbox, and outputs.files addresses paths
 # under that directory. No network -- a build must never need one.
 sandbox:
@@ -21,7 +20,7 @@ shared:
 				cp -r "$2/." "$root/"
 				rm -rf "$root/dist"
 				# In the repo a sample resolves @types/node and preact by
-				# walking up to the repo's node_modules. Staged elsewhere that
+				# walking up to the repo's node_modules; staged elsewhere that
 				# walk finds nothing and the type-check fails on the sample's
 				# own imports. The link puts it back at the same relative
 				# position (the repo is readable in the sandbox, just not
@@ -98,8 +97,8 @@ tests:
 					- 'preact/jsx-runtime'
 					# The rendered component's text survives bundling.
 					- 'ts0 \+ Preact'
-					# JSX text containing the word "any" is prose, not a type.
-					# The explicit-any ban parses rather than text-searching, so
+					# JSX text containing the word "any" is prose, not a type:
+					# the explicit-any ban parses rather than text-searching, so
 					# this component builds and its tagline reaches the output.
 					- 'any questions'
 				notMatch:
@@ -187,7 +186,7 @@ tests:
 					- 'triangle\.frag'
 			dist/math/vec.d.ts:
 		"!files":
-			# *.d.ts sources are not compiled to outputs. It copied to dist,
+			# *.d.ts sources are not compiled to outputs or copied to dist,
 			# test files produce no output of either kind, and sourcemap:false
 			# means no .map files.
 			dist/shaders.js:
@@ -210,8 +209,8 @@ tests:
 				test "$(grep -rl 'a\[0\] + b\[0\]' dist | wc -l)" -eq 1
 				ls dist/chunk-*.js >/dev/null
 				# bundleShared:false inverts exactly that: no chunks at all, and
-				# the shared body is copied into each output. That output uses
-				# it, so a consumer fetching one file needs no sibling.
+				# the shared body is copied into each output that uses it, so a
+				# consumer fetching one file needs no sibling.
 				node {inputs.opt-out.js}
 				rm -rf dist
 				ts0 build 2>&1 | tee -a "$1"

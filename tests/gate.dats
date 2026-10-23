@@ -1,9 +1,9 @@
 # The type-check gate and the explicit-`any` ban: there must be NO way to build
 # or run code that has not passed tsc. Every path that emits or executes --
-# build, run, run --no-build, test -- has to refuse broken code. Leave nothing
-# behind, for the node target, the js (directory) target. HTML entries alike.
-# The fixtures are deliberately shaped so a skipped check would
-# LOOK fine: the type error strips to valid JS. The test file registers no
+# build, run, run --no-build, test -- has to refuse broken code and leave
+# nothing behind, for the node target, the js (directory) target and HTML
+# entries alike. The fixtures are deliberately shaped so a skipped check would
+# LOOK fine: the type error strips to valid JS and the test file registers no
 # tests, so `run --no-build` and `test` would exit 0 if the gate were ever
 # bypassed. See CLAUDE.md, "Type-checking".
 sandbox:
@@ -100,7 +100,7 @@ tests:
 				. {shared.stage.sh}
 				stage "$1" "$(dirname {inputs.ts0.json})"
 				# dats creates the parent of every declared !files entry, so
-				# out/ exists before the build does anything. Drop it first or
+				# out/ exists before the build does anything; drop it first or
 				# the check below asserts dats' own artifact.
 				rm -rf out
 				if ts0 build; then echo "FAIL: entry under a dot-directory built despite a type error"; exit 1; fi
@@ -231,7 +231,7 @@ tests:
 	# "Type-checking..." line that had checked nothing.
 	#
 	# Staged inline rather than kept under samples/: build and test recurse
-	# into every nested ts0 project. A permanently-broken one living in the
+	# into every nested ts0 project, so a permanently-broken one living in the
 	# tree would fail the repo's own build forever.
 	- desc: "a type error in an HTML entry fails the build"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
@@ -267,7 +267,7 @@ tests:
 
 	# Nested projects are RECURSED INTO, never skipped. A nested ts0.json means
 	# different settings (JSX, target, loaders), so the parent's gate cannot
-	# check that tree. It delegates instead, building and testing it under its
+	# check that tree -- it delegates instead, building and testing it under its
 	# own config. Skipping it was the alternative, and it reports green over
 	# code nothing ever checked.
 	- desc: "a broken nested project fails the parent's build and test"
@@ -305,10 +305,10 @@ tests:
 			- "recursion OK: the nested project was entered and refused"
 
 	# Each project must find the one test file IT owns. The other way to get
-	# this wrong is to glob the nested tests into the parent's own run. These
+	# this wrong is to glob the nested tests into the parent's own run, which
 	# EXECUTES a program the parent's gate never checked, under settings it was
-	# not written for. Counting the discovery lines is what tells both apart: a
-	# green run says nothing about which project ran what.
+	# not written for. Counting the discovery lines is what tells the two apart:
+	# a green run says nothing about which project ran what.
 	- desc: "a clean nested project is built and tested by the parent, each finding its own tests"
 	  cmd: bash {inputs.run.sh} {outputs.build.log}
 	  inputs:

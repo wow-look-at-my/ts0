@@ -1,4 +1,8 @@
-// Regression tests for the single-file fetch interceptor.
+// Regression tests for the single-file fetch interceptor. The interceptor is a
+// browser IIFE; here we evaluate it against a minimal window/document shim and
+// assert it serves embedded assets for every fetch() input shape -- string, a
+// URL object (the `fetch(new URL(...))` form its own header documents), and a
+// Request-like object with a `.url`.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

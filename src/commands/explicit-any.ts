@@ -1,4 +1,19 @@
 // Explicit-`any` ban.
+//
+// `strict` (noImplicitAny) makes tsc reject an *implicit* any, but tsc has no
+// flag at all for an *explicit* one: `let x: any`, `x as any`, `<any>x`,
+// `any[]`, `Promise<any>` are all legal TypeScript. ts0 bans them outright --
+// an explicit `any` silently switches type-checking off for everything it
+// touches, which is exactly what the unskippable type-check gate exists to
+// prevent -- so this pass runs inside `runTypecheck()` and every command that
+// emits or executes code fails on it, just like a type error.
+//
+// The detection is a real parse, never a text search: `any` appears in
+// identifiers (`const anyOf = ...`), strings, comments and JSX text
+// ("Do you have any questions?"), none of which are types. TypeScript's own
+// parser is used -- the AnyKeyword token only ever occurs as a type -- so a
+// valid program can never be failed for a word that merely reads as "any".
+// Parsing is syntax-only (no program, no checker), so it costs milliseconds.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -10,7 +25,11 @@ type TsNode = import("typescript").Node;
 let tsApi: TypeScriptApi | undefined;
 
 // typescript loads ts0's own TypeScript, resolved exactly like the tsc binary
-// in build.ts (createRequire on import.meta.url).
+// in build.ts (createRequire on import.meta.url), so the user's project needs
+// no typescript install of its own. Under the prebuilt ts0.cjs this resolves
+// to the extracted cache copy -- scripts/build-prebuilt.ts embeds
+// lib/typescript.js for this pass. Memoized: watch mode re-checks on every
+// rebuild and the compiler is a big module to load.
 function typescript(): TypeScriptApi {
 	if (!tsApi) {
 		tsApi = createRequire(import.meta.url)("typescript") as TypeScriptApi;
@@ -59,7 +78,10 @@ export function findExplicitAny(rootDir: string, excludeDirs: string[]): Explici
 
 	for (const file of collectSourceFiles(rootDir, excludeDirs)) {
 		const text = readFileSync(file, "utf-8");
-		// Cheap pre-filter. No `any` token anywhere means nothing to parse for -- and, on a project with none at all, the compiler is never even loaded.
+		// Cheap pre-filter: no `any` token anywhere means nothing to parse for
+		// -- and, on a project with none at all, the compiler is never even
+		// loaded. (The reverse is not true: a match still has to be parsed to
+		// know whether it is a type, an identifier, a string, or prose.)
 		if (!/\bany\b/.test(text)) continue;
 
 		const ts = typescript();
@@ -67,8 +89,9 @@ export function findExplicitAny(rootDir: string, excludeDirs: string[]): Explici
 			file,
 			text,
 			ts.ScriptTarget.ESNext,
-			// Parent pointers: node.getStart() consults them for the exact token position.
-			true,
+			// Parent pointers: node.getStart() consults them for the exact
+			// token position (node.pos still includes leading trivia).
+			/*setParentNodes*/ true,
 			/\.tsx$/i.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
 		);
 		const rel = relative(rootDir, file).split(/[\\/]/).join("/");
@@ -87,7 +110,7 @@ export function findExplicitAny(rootDir: string, excludeDirs: string[]): Explici
 	return findings;
 }
 
-// checkNoExplicitAny is the gate-facing wrapper. Same {success, output} shape
+// checkNoExplicitAny is the gate-facing wrapper: same {success, output} shape
 // as the tsc passes, with tsc-style `file(line,col)` locations so editors and
 // terminals can jump to them.
 export function checkNoExplicitAny(rootDir: string, excludeDirs: string[]): { success: boolean; output: string } {

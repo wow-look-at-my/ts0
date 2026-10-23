@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
-# prebuilt-smoke.sh -- verifies the prebuilt ts0.js end-to-end the way a consumer runs it: stock Node only.
+# prebuilt-smoke.sh -- verifies the prebuilt ts0.js end-to-end the way a
+# consumer runs it: stock Node only. The environment is stripped so `node`
+# is the ONLY toolchain reachable (no npm, no npx), and the esbuild-native
+# fetch is exercised against a local HTTP server holding the just-built
+# natives (so the smoke needs no external network). It then runs the same
+# assertions CI makes against the npm build: the init flow, the type-check
+# gate (including the explicit-`any` ban, which loads the extracted compiler
+# API in-process), and the samples (basic, js incl. declaration emit + determinism,
+# html, html-jsx, userscript, bookmarklet) -- plus the prebuilt-specific
+# behaviors: the pipe form
+# (`cat ts0.js | node - build`), the clear fetch-failure message, and
+# offline cache reuse.
+#
+# Usage: scripts/prebuilt-smoke.sh <path-to-ts0.js> <path-to-natives-dir>
+#
+# Must run from a repo checkout with node_modules installed (the samples'
+# type-check resolves @types/node and preact from it -- project dependencies
+# are the project's business; ts0.js supplies the toolchain).
 set -euo pipefail
 
 TS0JS=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -18,7 +35,9 @@ NATIVE_FILE=$(cd "$NATIVES" && ls esbuild-*_linux_"$ARCH" 2>/dev/null | head -1)
 [ -n "$NATIVE_FILE" ] || { echo "missing native esbuild-*_linux_$ARCH in $NATIVES"; exit 1; }
 
 # The stripped environment: a bin dir holding ONLY node, plus /usr/bin:/bin
-# for the shell utilities this script itself needs inside `env -i`.
+# for the shell utilities this script itself needs inside `env -i`. GitHub
+# runners and dev machines install npm next to node (excluded); asserted
+# below.
 NODE_BIN=$(command -v node)
 BINDIR=$(mktemp -d)
 ln -s "$NODE_BIN" "$BINDIR/node"
@@ -66,7 +85,12 @@ echo "== init flow (init/build/run/test in a fresh project) =="
 proj=$(mktemp -d)
 (
 	cd "$proj"
-	# Without npm on PATH, init's dependency install step prints a warning and skips -- expected.
+	# Without npm on PATH, init's dependency install step prints a warning
+	# and skips -- expected. The scaffold's node-target type-check needs the
+	# project's OWN @types/node (a project dependency, exactly what `npm
+	# install` would have provided), so stand in for it by copying the
+	# repo's copy. ts0.js supplies node + tsc + esbuild; it does not (and
+	# should not) supply the project's dependencies.
 	t0 init
 	mkdir -p node_modules
 	cp -R "$REPO/node_modules/@types" node_modules/@types
@@ -112,7 +136,7 @@ printf 'export const n: number = "nope";\n' > "$jsdir/src/bad.ts"
 
 echo "== explicit any is a build error (needs the extracted compiler API) =="
 # The ban parses with the TypeScript compiler API, loaded in-process from the
-# extracted cache -- the code path. That path needs lib/typescript.js rather
+# extracted cache -- the one code path that needs lib/typescript.js rather
 # than the tsc CLI chain. Exercised through the pipe form too, where the
 # bundle has no path of its own to resolve from.
 anydir=$(mktemp -d)
@@ -127,7 +151,8 @@ printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$anydi
 		TS0_ESBUILD_URL="$ESBUILD_URL" node - build; then
 		echo "FAIL: piped ts0 built despite an explicit any"; exit 1
 	fi
-	# The same program without the `any` must build -- the ban is the only thing standing in the way.
+	# The same program without the `any` must build -- the ban is the only
+	# thing standing in the way.
 	printf 'export function f(x: number): number {\n\treturn Number(x);\n}\n' > src/main.ts
 	t0 build
 	test -f dist/main.js
@@ -136,10 +161,11 @@ printf 'export function f(x: any): number {\n\treturn Number(x);\n}\n' > "$anydi
 echo "== the embedded @types/node carries the packages it imports from =="
 # @types/node imports undici-types for fetch, so Response, Request and Headers
 # live there. A bundle that embeds @types/node alone leaves a Response with no
-# members. This program fails with "Property 'ok' does not exist on type
+# members: this program fails with "Property 'ok' does not exist on type
 # 'Response'", in a project whose only fault is trusting the types ts0 ships.
 # tsc reports the members rather than the missing package, so nothing else in
-# this file would have caught it.
+# this file would have caught it. It only reproduces in the bundle -- from
+# source, undici-types sits beside @types/node in ts0's own node_modules.
 fetchdir=$(mktemp -d)
 printf '%s\n' '{ "entry": "src/main.ts", "outdir": "dist", "target": "node", "format": "esm" }' > "$fetchdir/ts0.json"
 mkdir -p "$fetchdir/src"
@@ -254,9 +280,9 @@ echo "== cache extracted exactly once; esbuild native fetched exactly once =="
 extractions=$(find "$TS0_CACHE" -mindepth 1 -maxdepth 1 -type d | wc -l)
 test "$extractions" -eq 1
 test -f "$TS0_CACHE"/*/.ts0-extracted
-# The compiler is embedded ONCE, as the API. The extracted package is
+# The compiler is embedded ONCE, as the API: the extracted package is
 # lib/typescript.js plus the generated bin/tsc driver over it -- never the
-# npm package's separate CLI rebuild (lib/_tsc.js). This would duplicate it.
+# npm package's separate CLI rebuild (lib/_tsc.js), which would duplicate it.
 test -f "$TS0_CACHE"/*/node_modules/typescript/lib/typescript.js
 test -f "$TS0_CACHE"/*/node_modules/typescript/bin/tsc
 test -z "$(find "$TS0_CACHE" -name '_tsc.js')"

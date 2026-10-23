@@ -6,7 +6,10 @@
 // @grant        none
 // ==/UserScript==
 
-// The header above is metadata the userscript manager parses from the BUILT file, so ts0 re-prepends it byte-exactly.
+// The header above is metadata the userscript manager parses from the BUILT
+// file, so ts0 re-prepends it byte-exactly (preserveHeader). The import below
+// is extensionless: browser-target entries are type-checked with bundler
+// module resolution, matching how esbuild actually resolves it.
 import { greet } from './lib/greet';
 
 export function banner(): string {

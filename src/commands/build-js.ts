@@ -7,7 +7,12 @@ import { baseEsbuildOptions } from "./esbuild-base.ts";
 import { formatEsbuildDiagnostic } from "../reporter.ts";
 
 // isJsTarget reports whether the configured entry selects the "js" library
-// target: a *directory* of TypeScript modules compiled in place.
+// target: a *directory* of TypeScript modules compiled in place — every file
+// becomes a separate output preserving the directory structure, rather than a
+// single bundled entry. It is adjacent to and mutually exclusive with the HTML
+// target (entry ending in .html) and the default single-entry target (entry is
+// a .ts/.tsx file). Selection is by entry shape, mirroring how the HTML target
+// is chosen by extension.
 export function isJsTarget(entry: string | undefined, rootDir: string): boolean {
 	if (!entry) return false;
 	const p = resolve(rootDir, entry);
@@ -42,12 +47,14 @@ function collectEntryPoints(srcDir: string, outDirAbs: string): string[] {
 	return found;
 }
 
-// declarationsPlugin emits the parallel *.d.ts tree (tsc, declaration-only.
-// See emitDeclarations in build.ts) after each successful esbuild build. The
-// one-shot build AND every watch rebuild, so the .js and .d.ts trees never
+// declarationsPlugin emits the parallel *.d.ts tree (tsc, declaration-only;
+// see emitDeclarations in build.ts) after each successful esbuild build --
+// the one-shot build AND every watch rebuild, so the .js and .d.ts trees never
 // drift apart in either mode. It runs in onEnd, after esbuild wrote the .js
-// outputs, and reports an emit failure as a build error. The one-shot build
+// outputs, and reports an emit failure as a build error: the one-shot build
 // comes back failed (ts0 build exits non-zero) and a watch rebuild logs it.
+// A build that already failed (type-check gate, bundle error) skips the pass,
+// and noEmitOnError inside the pass means a failure writes no .d.ts at all.
 function declarationsPlugin(
 	config: Ts0Config,
 	rootDir: string,
@@ -68,20 +75,19 @@ function declarationsPlugin(
 	};
 }
 
-// buildJs compiles a directory of TypeScript modules into a parallel tree of ESM
-// JavaScript under outdir. Each source file is its own esbuild entry point, so a
-// consumer can import any single output module by URL. Code splitting is enabled
-// (for esm output): a module imported by more than one entry is emitted once
-// into a shared chunk. One entry imported, never duplicated into each output.
-// The consumer still writes a single import — the browser fetches any shared
-// chunk transitively. Loader-backed imports (e.g. .wgsl text) and non-shared
-// local imports stay inlined in the importing module. This is the shape a
-// library deployed to static hosting (GitHub Pages, a CDN) wants.
+// buildJs compiles a directory of TypeScript modules into a parallel tree of
+// ESM JavaScript under outdir. Each source file is its own esbuild entry point,
+// so a consumer can import any single output module by URL. Code splitting is
+// enabled (for esm output): a module imported by more than one entry is emitted
+// once into a shared chunk and imported, never duplicated into each output. The
+// consumer still writes a single import — the browser fetches any shared chunk
+// transitively. Loader-backed imports (e.g. .wgsl text) and non-shared local
+// imports stay inlined in the importing module. This is the shape a library
+// deployed to static hosting (GitHub Pages, a CDN) wants.
 //
-// A parallel *.d.ts tree is emitted next to the *.js outputs
-// (declarationsPlugin above), so a deployed library ships. Type declarations
-// at the same URLs as its code. This happens unless config.declarations is
-// false.
+// Unless config.declarations is false, a parallel *.d.ts tree is emitted next
+// to the *.js outputs (declarationsPlugin above), so a deployed library ships
+// type declarations at the same URLs as its code.
 export async function buildJs(
 	config: Ts0Config,
 	rootDir: string,
@@ -113,18 +119,24 @@ export async function buildJs(
 
 	const esbuildConfig: esbuild.BuildOptions = {
 		entryPoints,
-		// outdir + outbase mirror the source tree under outdir: <src>/webgpu/sky.ts -> <outdir>/webgpu/sky.js.
+		// outdir + outbase mirror the source tree under outdir:
+		// <src>/webgpu/sky.ts -> <outdir>/webgpu/sky.js.
 		outdir: outDir,
 		outbase: srcDir,
 		...baseEsbuildOptions(config),
-		// Deduplicate code shared across entry points into chunks instead of inlining a copy into each output.
+		// Deduplicate code shared across entry points into chunks instead of
+		// inlining a copy into each output -- unless `bundleShared: false` asks
+		// for self-contained outputs. Chunking is only expressible for esm
+		// output; other formats fall back to (duplicating) inlined output
+		// regardless.
 		...(config.format === "esm" && config.bundleShared !== false && { splitting: true }),
 		// User overrides (escape hatch - e.g. loader: { ".wgsl": "text" }).
 		...config.esbuild,
 	};
 
-	// Declaration emit is on by default for this target (a library's whole point
-	// is consumption); "declarations": false opts out.
+	// Declaration emit is on by default for this target (a library's whole
+	// point is consumption); "declarations": false opts out. Prepended so it
+	// runs before any user-supplied plugin from the escape hatch.
 	if (config.declarations !== false) {
 		esbuildConfig.plugins = [
 			declarationsPlugin(config, rootDir, { entryPoints, srcDir, outDir }),
@@ -134,7 +146,11 @@ export async function buildJs(
 
 	try {
 		if (options?.watch) {
-			// Type-check on every build, initial and rebuild (see typecheckPlugin): build() skips its one-shot gate in watch mode.
+			// Type-check on every build, initial and rebuild (see typecheckPlugin):
+			// build() skips its one-shot gate in watch mode, so the plugin is what
+			// covers the watch path. esbuild writes no output for a build whose
+			// onStart reports errors, so a rebuild that doesn't type-check can't
+			// emit a broken .js tree -- the previous good output stays in place.
 			esbuildConfig.plugins = [typecheckPlugin(config, rootDir), ...(esbuildConfig.plugins ?? [])];
 			const ctx = await esbuild.context(esbuildConfig);
 			await ctx.watch();

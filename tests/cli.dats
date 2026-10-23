@@ -1,12 +1,12 @@
-# The command surface end-to-end. `ts0 init` scaffolds a project that `build`,
-# `run` and `test` then handle. And `--config` points the whole build at a
+# The command surface end-to-end: `ts0 init` scaffolds a project that `build`,
+# `run` and `test` then handle, and `--config` points the whole build at a
 # named config file elsewhere in the tree.
 #
 # No network: init's `npm install` cannot reach a registry here (it is a soft
-# step -- init reports the failure and carries on). The scaffolded project
+# step -- init reports the failure and carries on), so the scaffolded project
 # gets the repo's node_modules linked in, exactly the position it resolves
 # @types/node from when a project is built inside the repo. What is under test
-# is the scaffolding and the commands, not npm.
+# is the scaffolding and the three commands, not npm.
 sandbox:
 	network: false
 
@@ -51,7 +51,7 @@ tests:
 	  inputs:
 		files:
 			# Several differently-configured builds can live in one repo:
-			# rootDir stays the config file's own directory. Entry/outfile
+			# rootDir stays the config file's own directory, so entry/outfile
 			# resolve exactly as a walk-up find would resolve them.
 			run.sh: |
 				set -euo pipefail
