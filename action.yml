@@ -19,16 +19,15 @@ runs:
     # Optional inputs omitted on purpose: ts0 is a build tool, so CI tracks latest.
     - name: Download ts0
       id: download
-      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
       with:
         project: ts0
 
     # Later steps, and a build a test starts, run `ts0` by name, so a caller never installs it by hand.
     - name: Put ts0 on PATH
       shell: bash
-      env:
-        TS0: ${{ steps.download.outputs.path }}
       run: |
+        TS0="${{ steps.download.outputs.path }}"
         dir="$RUNNER_TEMP/ts0-bin"
         mkdir -p "$dir"
         cp "$TS0" "$dir/ts0.cjs"
@@ -39,13 +38,13 @@ runs:
     - name: ts0 test
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        TS0: ${{ steps.download.outputs.path }}
-      run: node "$TS0" test
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" test
 
     - name: ts0 build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        TS0: ${{ steps.download.outputs.path }}
-      run: node "$TS0" build
+      run: |
+        TS0="${{ steps.download.outputs.path }}"
+        node "$TS0" build

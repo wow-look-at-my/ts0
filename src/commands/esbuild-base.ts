@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type * as esbuild from "esbuild";
 import type { Ts0Config } from "../config.ts";
 
@@ -5,45 +6,71 @@ import type { Ts0Config } from "../config.ts";
 // target (build.ts) and the js library target (build-js.ts). Each caller adds
 // its own entryPoints and output settings (outfile/outdir/outbase), then
 // spreads `config.esbuild` last as the escape hatch. Keeping this in one place
-// avoids drift between the two targets (platform, format, jsx threading, …).
+// avoids drift between both targets (platform, format, jsx threading, …).
 export function baseEsbuildOptions(config: Ts0Config): esbuild.BuildOptions {
 	return {
 		bundle: true,
-		// ts0 reports esbuild's errors/warnings itself (formatted, colorized,
-		// annotated -- see reporter.ts), from the same `result.errors`/
-		// `.warnings` this call already returns. esbuild's own default log level
-		// prints a second, uncoordinated copy straight to the terminal; silence
-		// that copy so there's exactly one report per diagnostic.
+		// ts0 reports esbuild's errors/warnings itself (formatted, colorized, annotated -- see reporter.ts), from the same `result.errors`/ `.warnings` this call already returns. esbuild's own default log level prints a second.
 		logLevel: "silent",
 		platform: config.target === "node" ? "node" : "browser",
 		format: config.format,
-		// The IIFE's exports-object global (only meaningful for format
-		// "iife"; esbuild ignores it otherwise).
+		// The IIFE's exports-object global (only meaningful for format "iife"; esbuild ignores it otherwise).
 		...(config.globalName && { globalName: config.globalName }),
 		minify: config.minify,
 		sourcemap: config.sourcemap,
 		target: "esnext",
-		// Node code has a run-time module resolver, so an imported package stays
-		// a `require("pkg")` the installed node_modules answers. bundleDependencies
-		// compiles those packages in instead, for an output that must run where
-		// its node_modules does not exist. Browser code has no such resolver and
-		// always bundles.
+		// Node code has a run-time module resolver, so an imported package stays a
+		// `require("pkg")` the installed node_modules answers.
 		...(config.target === "node" &&
 			!config.bundleDependencies && {
 				packages: "external",
 			}),
-		// JSX support (esbuild). Spread before the caller's `config.esbuild` so
-		// an explicit esbuild.jsx can still override it.
+		// JSX support (esbuild).
 		...(config.jsx && { jsx: config.jsx }),
 		...(config.jsxImportSource && { jsxImportSource: config.jsxImportSource }),
-		// Custom loaders (e.g. { ".wgsl": "text" }). Spread before the caller's
-		// `config.esbuild` so an explicit esbuild.loader can still override.
+		// Custom loaders (e.g. { ".wgsl": "text" }).
 		...(config.loaders && { loader: config.loaders as { [ext: string]: esbuild.Loader } }),
-		// Imports that stay external references in the output: the import
-		// statement is emitted verbatim and the target's contents are never
-		// pulled in. Shared by both targets, since "this import is resolved at
-		// runtime, not at build time" is a property of the code, not of which
-		// target compiles it.
+		// Imports that stay external references in the output.
 		...(config.external?.length && { external: config.external }),
+		...(config.cssModules === "construct" && { plugins: [constructCssModules(config.external ?? [])] }),
+	};
+}
+
+// matchesSpecifier applies the `external` rule: a pattern matches the
+// specifier as written, and "*" matches any run of characters.
+function matchesSpecifier(pattern: string, specifier: string): boolean {
+	const re = new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+	return re.test(specifier);
+}
+
+// constructCssModules builds each CSS module script import into the output as
+// a CSSStyleSheet made from the file's text. An import that `external` lists
+// stays a reference, so `external` wins.
+export function constructCssModules(external: string[]): esbuild.Plugin {
+	const namespace = "ts0-css-module";
+	return {
+		name: "ts0-css-modules-construct",
+		setup(build) {
+			build.onResolve({ filter: /.*/ }, async (args) => {
+				if (args.with?.type !== "css" || args.pluginData === namespace) return undefined;
+				if (external.some((p) => matchesSpecifier(p, args.path))) return undefined;
+				const resolved = await build.resolve(args.path, {
+					kind: args.kind,
+					importer: args.importer,
+					resolveDir: args.resolveDir,
+					pluginData: namespace,
+				});
+				if (resolved.errors.length) return { errors: resolved.errors };
+				return { path: resolved.path, namespace };
+			});
+			build.onLoad({ filter: /.*/, namespace }, async (args) => {
+				const css = await fs.readFile(args.path, "utf8");
+				return {
+					loader: "js",
+					contents: `const sheet = new CSSStyleSheet();\nsheet.replaceSync(${JSON.stringify(css)});\nexport default sheet;\n`,
+					watchFiles: [args.path],
+				};
+			});
+		},
 	};
 }

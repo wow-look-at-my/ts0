@@ -7,10 +7,8 @@
 		"ts0": "./dist/ts0"
 	},
 	"scripts": {
-		"build": "node --experimental-strip-types src/cli.ts build",
-		"build:prebuilt": "node --experimental-strip-types scripts/build-prebuilt.ts",
-		"prepare": "npm run build",
-		"prepublishOnly": "npm run build"
+		"prepare": "node --experimental-strip-types src/cli.ts build",
+		"prepublishOnly": "node --experimental-strip-types src/cli.ts build"
 	},
 	"files": [
 		"dist/ts0",
