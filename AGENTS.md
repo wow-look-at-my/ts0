@@ -52,7 +52,7 @@ bin/ts0                 # launcher action.yml copies onto PATH beside ts0.cjs
 ts0.json                # ts0 builds itself with these settings
 ```
 
-`ts0` is self-hosting: `package.json`'s `build` script invokes the CLI from source via `node --experimental-strip-types src/cli.ts build`, which reads the repo's own `ts0.json` and produces `dist/ts0`. Every `samples/*` directory is a nested ts0 project, so that command builds them too -- see "Nested projects" under Type-checking.
+`ts0` is self-hosting: the `justfile`'s `build` recipe invokes the CLI from source via `node --experimental-strip-types src/cli.ts build`, which reads the repo's own `ts0.json` and produces `dist/ts0`. Every `samples/*` directory is a nested ts0 project, so that command builds them too -- see "Nested projects" under Type-checking.
 
 ## Runtime requirements
 
@@ -63,7 +63,7 @@ ts0.json                # ts0 builds itself with these settings
 
 ```sh
 npm install
-npm run build                                       # build dist/ts0
+just build                                          # build dist/ts0
 node --experimental-strip-types src/cli.ts <cmd>    # run from source without building
 npm link && dats test tests/                        # behavioural suites (needs bwrap)
 ```
@@ -265,7 +265,7 @@ Three consumption paths:
 
 - **`action.yml` (repo root) for GitHub Actions consumers.** `uses: wow-look-at-my/ts0@master`, with no inputs, downloads the prebuilt `ts0.cjs` below and runs `test` then `build`. See the README's "GitHub Actions" section. It takes **no command input**. A caller that chooses the command can choose `--help`, a green check for zero work. `tests/action.dats` asserts multiple things. Both commands still run, in that order. No `node` line in the action interpolates an expression. The input set is exactly working-directory. Keep it that way.
 - **Prebuilt ts0.cjs on buildhost, the primary path for non-npm consumers.** Some machines carry stock Node but no npm, no node_modules and no git: webhook-runner's `//go:generate` step, a CI image, a container. Each downloads one platform-neutral JavaScript file from `https://dl.pazer.build/ts0?...` and runs it with `node`, or pipes it as `curl ... | node - build`. See the README's "Prebuilt ts0.cjs" section for the URLs, and "Prebuilt ts0.cjs" below for how it is built. Never recommend a `?v=N` pin: the release it names is deleted in time and the URL then answers 404.
-- **npm and git installs, for node projects.** `npm install github:wow-look-at-my/bundler` works because `package.json` has a `prepare` script that runs `npm run build`. An install from a git URL runs `prepare` automatically. `dist/ts0` is therefore built on the consumer's machine, and `npx ts0 …` works with no separate build step. The `"files"` field is irrelevant to a git install, but it matters for `npm publish`. Keep `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets consumes ts0 this way. The prebuilt machinery must never change this path's behavior. See the npm-path invariant in docs/prebuilt-ts0-cjs.md.
+- **npm and git installs, for node projects.** `npm install github:wow-look-at-my/bundler` works because `package.json` has a `prepare` script that runs the build. An install from a git URL runs `prepare` automatically. `dist/ts0` is therefore built on the consumer's machine, and `npx ts0 …` works with no separate build step. The `"files"` field is irrelevant to a git install, but it matters for `npm publish`. Keep `dist/ts0` and `src/runtime/fetch-interceptor.js` in it. js-snippets consumes ts0 this way. The prebuilt machinery must never change this path's behavior. See the npm-path invariant in docs/prebuilt-ts0-cjs.md.
 
 ## Prebuilt ts0.cjs (buildhost packaging)
 

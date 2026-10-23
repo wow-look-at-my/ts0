@@ -101,7 +101,7 @@ jobs:
       - run: npm ci
 
       - name: Build ts0.cjs + esbuild natives
-        run: npm run build:prebuilt
+        run: node --experimental-strip-types scripts/build-prebuilt.ts
 
       - name: Bare-node smoke (node on PATH, no npm)
         run: scripts/prebuilt-smoke.sh build-prebuilt/out/ts0.cjs build-prebuilt/out
