@@ -4,9 +4,13 @@ on:
   push:
     branches: ['**']
 
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +35,11 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      # The dats action downloads its tools (slopfix, the sandbox backend) from buildhost, which authenticates the job with an OIDC token. Without id-token: write the job fails with "OIDC token not available".
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -53,7 +61,7 @@ jobs:
 
       # Every behavioural assertion about the CLI lives here; docs/testing.md says what each covers.
       - name: Behaviour suites (dats)
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: tests/
 
@@ -81,7 +89,7 @@ jobs:
   # Packages ts0 for buildhost; the contract is docs/prebuilt-ts0-cjs.md.
   prebuilt:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -107,6 +115,7 @@ jobs:
   # Repeats the smoke on real arm64, so the linux/arm64 esbuild native runs end to end.
   smoke-prebuilt-linux-arm64:
     needs: prebuilt
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +139,7 @@ jobs:
   # Every branch publishes; "latest" still only ever resolves the default branch.
   publish:
     needs: [test, prebuilt, smoke-prebuilt-linux-arm64]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
@@ -147,7 +156,7 @@ jobs:
           name: prebuilt
           path: build-prebuilt/out
 
-      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@master
+      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@lkgb
         with:
           path: build-prebuilt/out
 
@@ -165,7 +174,7 @@ jobs:
             core.setOutput('branch', (github.ref_name || 'branch').replace(/[^A-Za-z0-9._-]/g, '-'));
 
       - name: Publish the html samples
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-site@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-site@lkgb
         with:
           server: https://pazer.build
           project: ts0
